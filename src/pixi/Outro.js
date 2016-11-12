@@ -8,8 +8,10 @@
         }
         exports.PIXI = PIXI;
     } else if (typeof define !== 'undefined' && define.amd) {
-        define(PIXI);
+        define('PIXI', (function() { return root.PIXI = PIXI; })() );
     } else {
         root.PIXI = PIXI;
     }
+
+    return PIXI;
 }).call(this);

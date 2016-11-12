@@ -1,45 +1,47 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
 /**
-* Creates a new BitmapData object.
+* A BitmapData object contains a Canvas element to which you can draw anything you like via normal Canvas context operations.
+* A single BitmapData can be used as the texture for one or many Images / Sprites. 
+* So if you need to dynamically create a Sprite texture then they are a good choice.
+*
+* Important note: Every BitmapData creates its own Canvas element. Because BitmapData's are now Game Objects themselves, and don't
+* live on the display list, they are NOT automatically cleared when you change State. Therefore you _must_ call BitmapData.destroy
+* in your State's shutdown method if you wish to free-up the resources the BitmapData used, it will not happen for you.
 *
 * @class Phaser.BitmapData
-*
-* @classdesc Note: This object is still experimental and likely to change.
-*
-* A BitmapData object can be thought of as a blank canvas onto which you can perform graphics operations as you would on a normal canvas, 
-* such as drawing lines, circles, arcs, fills and copying and setting blocks of pixel data. A single BitmapData can be used as the texture 
-* for multiple Sprites. So if you need to dynamically create a Sprite texture then they are a good choice. It supports the EaselJS Tiny API.
-*
 * @constructor
 * @param {Phaser.Game} game - A reference to the currently running game.
-* @param {number} [width=256] - The width of the BitmapData in pixels.
-* @param {number} [height=256] - The height of the BitmapData in pixels.
+* @param {string} key - Internal Phaser reference key for the BitmapData.
+* @param {number} [width=256] - The width of the BitmapData in pixels. If undefined or zero it's set to a default value.
+* @param {number} [height=256] - The height of the BitmapData in pixels. If undefined or zero it's set to a default value.
+* @param {boolean} [skipPool=false] - When this BitmapData generates its internal canvas to use for rendering, it will get the canvas from the CanvasPool if false, or create its own if true.
 */
-Phaser.BitmapData = function (game, width, height) {
+Phaser.BitmapData = function (game, key, width, height, skipPool) {
 
-    if (typeof width === 'undefined') { width = 256; }
-    if (typeof height === 'undefined') { height = 256; }
+    if (width === undefined || width === 0) { width = 256; }
+    if (height === undefined || height === 0) { height = 256; }
+    if (skipPool === undefined) { skipPool = false; }
 
     /**
-    * @property {Phaser.Game} game - A reference to the currently running game. 
+    * @property {Phaser.Game} game - A reference to the currently running game.
     */
     this.game = game;
 
     /**
-    * @property {string} name - The name of the BitmapData.
+    * @property {string} key - The key of the BitmapData in the Cache, if stored there.
     */
-    this.name = '';
+    this.key = key;
 
     /**
     * @property {number} width - The width of the BitmapData in pixels.
     */
     this.width = width;
-    
+
     /**
     * @property {number} height - The height of the BitmapData in pixels.
     */
@@ -49,29 +51,70 @@ Phaser.BitmapData = function (game, width, height) {
     * @property {HTMLCanvasElement} canvas - The canvas to which this BitmapData draws.
     * @default
     */
-    this.canvas = Phaser.Canvas.create(width, height);
-    
+    this.canvas = Phaser.Canvas.create(this, width, height, null, skipPool);
+
     /**
     * @property {CanvasRenderingContext2D} context - The 2d context of the canvas.
     * @default
     */
-    this.context = this.canvas.getContext('2d');
+    this.context = this.canvas.getContext('2d', { alpha: true });
 
     /**
-    * @property {array} imageData - The canvas image data.
+    * @property {CanvasRenderingContext2D} ctx - A reference to BitmapData.context.
+    */
+    this.ctx = this.context;
+
+    /**
+    * @property {string} smoothProperty - The context property needed for smoothing this Canvas.
+    */
+    this.smoothProperty = (game.renderType === Phaser.CANVAS) ? game.renderer.renderSession.smoothProperty : Phaser.Canvas.getSmoothingPrefix(this.context);
+
+    /**
+    * @property {ImageData} imageData - The context image data.
+    * Please note that a call to BitmapData.draw() or BitmapData.copy() does not update immediately this property for performance reason. Use BitmapData.update() to do so.
+    * This property is updated automatically after the first game loop, according to the dirty flag property.
     */
     this.imageData = this.context.getImageData(0, 0, width, height);
 
     /**
-    * @property {UInt8Clamped} pixels - A reference to the context imageData buffer.
+    * A Uint8ClampedArray view into BitmapData.buffer.
+    * Note that this is unavailable in some browsers (such as Epic Browser due to its security restrictions)
+    * @property {Uint8ClampedArray} data
     */
-    if (this.imageData.data.buffer)
+    this.data = null;
+
+    if (this.imageData)
     {
-        this.pixels = this.imageData.data.buffer;
+        this.data = this.imageData.data;
     }
-    else
+
+    /**
+    * @property {Uint32Array} pixels - An Uint32Array view into BitmapData.buffer.
+    */
+    this.pixels = null;
+
+    /**
+    * @property {ArrayBuffer} buffer - An ArrayBuffer the same size as the context ImageData.
+    */
+    if (this.data)
     {
-        this.pixels = this.imageData.data;
+        if (this.imageData.data.buffer)
+        {
+            this.buffer = this.imageData.data.buffer;
+            this.pixels = new Uint32Array(this.buffer);
+        }
+        else
+        {
+            if (window['ArrayBuffer'])
+            {
+                this.buffer = new ArrayBuffer(this.imageData.data.length);
+                this.pixels = new Uint32Array(this.buffer);
+            }
+            else
+            {
+                this.pixels = this.imageData.data;
+            }
+        }
     }
 
     /**
@@ -79,18 +122,25 @@ Phaser.BitmapData = function (game, width, height) {
     * @default
     */
     this.baseTexture = new PIXI.BaseTexture(this.canvas);
-    
+
     /**
     * @property {PIXI.Texture} texture - The PIXI.Texture.
     * @default
     */
     this.texture = new PIXI.Texture(this.baseTexture);
-    
+
+    /**
+    * @property {Phaser.FrameData} frameData - The FrameData container this BitmapData uses for rendering.
+    */
+    this.frameData = new Phaser.FrameData();
+
     /**
     * @property {Phaser.Frame} textureFrame - The Frame this BitmapData uses for rendering.
     * @default
     */
-    this.textureFrame = new Phaser.Frame(0, 0, 0, width, height, 'bitmapData', game.rnd.uuid());
+    this.textureFrame = this.frameData.addFrame(new Phaser.Frame(0, 0, 0, width, height, 'bitmapData'));
+
+    this.texture.frame = this.textureFrame;
 
     /**
     * @property {number} type - The const type of this object.
@@ -98,147 +148,916 @@ Phaser.BitmapData = function (game, width, height) {
     */
     this.type = Phaser.BITMAPDATA;
 
-    this._dirty = false;
+    /**
+    * @property {boolean} disableTextureUpload - If disableTextureUpload is true this BitmapData will never send its image data to the GPU when its dirty flag is true.
+    */
+    this.disableTextureUpload = false;
 
-}
+    /**
+    * @property {boolean} dirty - If dirty this BitmapData will be re-rendered.
+    */
+    this.dirty = false;
+
+    //  Aliases
+    this.cls = this.clear;
+
+    /**
+    * @property {number} _image - Internal cache var.
+    * @private
+    */
+    this._image = null;
+
+    /**
+    * @property {Phaser.Point} _pos - Internal cache var.
+    * @private
+    */
+    this._pos = new Phaser.Point();
+
+    /**
+    * @property {Phaser.Point} _size - Internal cache var.
+    * @private
+    */
+    this._size = new Phaser.Point();
+
+    /**
+    * @property {Phaser.Point} _scale - Internal cache var.
+    * @private
+    */
+    this._scale = new Phaser.Point();
+
+    /**
+    * @property {number} _rotate - Internal cache var.
+    * @private
+    */
+    this._rotate = 0;
+
+    /**
+    * @property {object} _alpha - Internal cache var.
+    * @private
+    */
+    this._alpha = { prev: 1, current: 1 };
+
+    /**
+    * @property {Phaser.Point} _anchor - Internal cache var.
+    * @private
+    */
+    this._anchor = new Phaser.Point();
+
+    /**
+    * @property {number} _tempR - Internal cache var.
+    * @private
+    */
+    this._tempR = 0;
+
+    /**
+    * @property {number} _tempG - Internal cache var.
+    * @private
+    */
+    this._tempG = 0;
+
+    /**
+    * @property {number} _tempB - Internal cache var.
+    * @private
+    */
+    this._tempB = 0;
+
+    /**
+    * @property {Phaser.Circle} _circle - Internal cache var.
+    * @private
+    */
+    this._circle = new Phaser.Circle();
+
+    /**
+    * @property {HTMLCanvasElement} _swapCanvas - A swap canvas. Used by moveH and moveV, created in those methods.
+    * @private
+    */
+    this._swapCanvas = undefined;
+
+};
 
 Phaser.BitmapData.prototype = {
 
     /**
-    * Updates the given Sprite so that it uses this BitmapData as its texture.
-    * @method Phaser.BitmapData#add
-    * @param {Phaser.Sprite} sprite - The sprite to apply this texture to.
+    * Shifts the contents of this BitmapData by the distances given.
+    * 
+    * The image will wrap-around the edges on all sides if the wrap argument is true (the default).
+    *
+    * @method Phaser.BitmapData#move
+    * @param {integer} x - The amount of pixels to horizontally shift the canvas by. Use a negative value to shift to the left, positive to the right.
+    * @param {integer} y - The amount of pixels to vertically shift the canvas by. Use a negative value to shift up, positive to shift down.
+    * @param {boolean} [wrap=true] - Wrap the content of the BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    add: function (sprite) {
+    move: function (x, y, wrap) {
 
-        sprite.loadTexture(this);
+        if (x !== 0)
+        {
+            this.moveH(x, wrap);
+        }
+
+        if (y !== 0)
+        {
+            this.moveV(y, wrap);
+        }
+
+        return this;
 
     },
 
     /**
-    * Given an array of Sprites it will update each of them so that their Textures reference this BitmapData.
-    * @method Phaser.BitmapData#addTo
-    * @param {Phaser.Sprite[]} sprites - An array of Sprites to apply this texture to.
+    * Shifts the contents of this BitmapData horizontally.
+    * 
+    * The image will wrap-around the sides if the wrap argument is true (the default).
+    *
+    * @method Phaser.BitmapData#moveH
+    * @param {integer} distance - The amount of pixels to horizontally shift the canvas by. Use a negative value to shift to the left, positive to the right.
+    * @param {boolean} [wrap=true] - Wrap the content of the BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    addTo: function (sprites) {
+    moveH: function (distance, wrap) {
 
-        for (var i = 0; i < sprites.length; i++)
+        if (wrap === undefined) { wrap = true; }
+
+        if (this._swapCanvas === undefined)
         {
-            if (sprites[i].texture)
+            this._swapCanvas = PIXI.CanvasPool.create(this, this.width, this.height);
+        }
+
+        var c = this._swapCanvas;
+        var ctx = c.getContext('2d');
+        var h = this.height;
+        var src = this.canvas;
+
+        ctx.clearRect(0, 0, this.width, this.height);
+
+        if (distance < 0)
+        {
+            distance = Math.abs(distance);
+
+            //  Moving to the left
+            var w = this.width - distance;
+
+            //  Left-hand chunk
+            if (wrap)
             {
-                sprites[i].loadTexture(this);
+                ctx.drawImage(src, 0, 0, distance, h, w, 0, distance, h);
+            }
+
+            //  Rest of the image
+            ctx.drawImage(src, distance, 0, w, h, 0, 0, w, h);
+        }
+        else
+        {
+            //  Moving to the right
+            var w = this.width - distance;
+
+            //  Right-hand chunk
+            if (wrap)
+            {
+                ctx.drawImage(src, w, 0, distance, h, 0, 0, distance, h);
+            }
+
+            //  Rest of the image
+            ctx.drawImage(src, 0, 0, w, h, distance, 0, w, h);
+        }
+
+        this.clear();
+
+        return this.copy(this._swapCanvas);
+
+    },
+
+    /**
+    * Shifts the contents of this BitmapData vertically.
+    * 
+    * The image will wrap-around the sides if the wrap argument is true (the default).
+    *
+    * @method Phaser.BitmapData#moveV
+    * @param {integer} distance - The amount of pixels to vertically shift the canvas by. Use a negative value to shift up, positive to shift down.
+    * @param {boolean} [wrap=true] - Wrap the content of the BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    moveV: function (distance, wrap) {
+
+        if (wrap === undefined) { wrap = true; }
+
+        if (this._swapCanvas === undefined)
+        {
+            this._swapCanvas = PIXI.CanvasPool.create(this, this.width, this.height);
+        }
+
+        var c = this._swapCanvas;
+        var ctx = c.getContext('2d');
+        var w = this.width;
+        var src = this.canvas;
+
+        ctx.clearRect(0, 0, this.width, this.height);
+
+        if (distance < 0)
+        {
+            distance = Math.abs(distance);
+
+            //  Moving up
+            var h = this.height - distance;
+
+            //  Top chunk
+            if (wrap)
+            {
+                ctx.drawImage(src, 0, 0, w, distance, 0, h, w, distance);
+            }
+
+            //  Rest of the image
+            ctx.drawImage(src, 0, distance, w, h, 0, 0, w, h);
+        }
+        else
+        {
+            //  Moving down
+            var h = this.height - distance;
+
+            //  Bottom chunk
+            if (wrap)
+            {
+                ctx.drawImage(src, 0, h, w, distance, 0, 0, w, distance);
+            }
+
+            //  Rest of the image
+            ctx.drawImage(src, 0, 0, w, h, 0, distance, w, h);
+        }
+
+        this.clear();
+
+        return this.copy(this._swapCanvas);
+
+    },
+
+    /**
+    * Updates the given objects so that they use this BitmapData as their texture.
+    * This will replace any texture they will currently have set.
+    *
+    * @method Phaser.BitmapData#add
+    * @param {Phaser.Sprite|Phaser.Sprite[]|Phaser.Image|Phaser.Image[]} object - Either a single Sprite/Image or an Array of Sprites/Images.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    add: function (object) {
+
+        if (Array.isArray(object))
+        {
+            for (var i = 0; i < object.length; i++)
+            {
+                if (object[i]['loadTexture'])
+                {
+                    object[i].loadTexture(this);
+                }
+            }
+        }
+        else
+        {
+            object.loadTexture(this);
+        }
+
+        return this;
+
+    },
+
+    /**
+    * Takes the given Game Object, resizes this BitmapData to match it and then draws it into this BitmapDatas canvas, ready for further processing.
+    * The source game object is not modified by this operation.
+    * If the source object uses a texture as part of a Texture Atlas or Sprite Sheet, only the current frame will be used for sizing.
+    * If a string is given it will assume it's a cache key and look in Phaser.Cache for an image key matching the string.
+    *
+    * @method Phaser.BitmapData#load
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapData|Image|HTMLCanvasElement|string} source - The object that will be used to populate this BitmapData. If you give a string it will try and find the Image in the Game.Cache first.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    load: function (source) {
+
+        if (typeof source === 'string')
+        {
+            source = this.game.cache.getImage(source);
+        }
+
+        if (source)
+        {
+            this.resize(source.width, source.height);
+            this.cls();
+        }
+        else
+        {
+            return;
+        }
+
+        this.draw(source);
+
+        this.update();
+
+        return this;
+
+    },
+
+    /**
+    * Clears the BitmapData context using a clearRect.
+    *
+    * @method Phaser.BitmapData#cls
+    */
+
+    /**
+    * Clears the BitmapData context using a clearRect.
+    *
+    * You can optionally define the area to clear.
+    * If the arguments are left empty it will clear the entire canvas.
+    *
+    * You may need to call BitmapData.update after this in order to clear out the pixel data, 
+    * but Phaser will not do this automatically for you.
+    *
+    * @method Phaser.BitmapData#clear
+    * @param {number} [x=0] - The x coordinate of the top-left of the area to clear.
+    * @param {number} [y=0] - The y coordinate of the top-left of the area to clear.
+    * @param {number} [width] - The width of the area to clear. If undefined it will use BitmapData.width.
+    * @param {number} [height] - The height of the area to clear. If undefined it will use BitmapData.height.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    clear: function (x, y, width, height) {
+
+        if (x === undefined) { x = 0; }
+        if (y === undefined) { y = 0; }
+        if (width === undefined) { width = this.width; }
+        if (height === undefined) { height = this.height; }
+
+        this.context.clearRect(x, y, width, height);
+
+        this.dirty = true;
+
+        return this;
+
+    },
+
+    /**
+    * Fills the BitmapData with the given color.
+    *
+    * @method Phaser.BitmapData#fill
+    * @param {number} r - The red color value, between 0 and 0xFF (255).
+    * @param {number} g - The green color value, between 0 and 0xFF (255).
+    * @param {number} b - The blue color value, between 0 and 0xFF (255).
+    * @param {number} [a=1] - The alpha color value, between 0 and 1.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    fill: function (r, g, b, a) {
+
+        if (a === undefined) { a = 1; }
+
+        this.context.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+        this.context.fillRect(0, 0, this.width, this.height);
+        this.dirty = true;
+
+        return this;
+
+    },
+
+    /**
+    * Creates a new Image element by converting this BitmapDatas canvas into a dataURL.
+    *
+    * The image is then stored in the image Cache using the key given.
+    *
+    * Finally a PIXI.Texture is created based on the image and returned.
+    *
+    * You can apply the texture to a sprite or any other supporting object by using either the
+    * key or the texture. First call generateTexture:
+    *
+    * `var texture = bitmapdata.generateTexture('ball');`
+    *
+    * Then you can either apply the texture to a sprite:
+    * 
+    * `game.add.sprite(0, 0, texture);`
+    *
+    * or by using the string based key:
+    *
+    * `game.add.sprite(0, 0, 'ball');`
+    *
+    * @method Phaser.BitmapData#generateTexture
+    * @param {string} key - The key which will be used to store the image in the Cache.
+    * @return {PIXI.Texture} The newly generated texture.
+    */
+    generateTexture: function (key) {
+
+        var image = new Image();
+
+        image.src = this.canvas.toDataURL("image/png");
+
+        var obj = this.game.cache.addImage(key, '', image);
+
+        return new PIXI.Texture(obj.base);
+
+    },
+
+    /**
+    * Resizes the BitmapData. This changes the size of the underlying canvas and refreshes the buffer.
+    *
+    * @method Phaser.BitmapData#resize
+    * @param {integer} width - The new width of the BitmapData.
+    * @param {integer} height - The new height of the BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    resize: function (width, height) {
+
+        if (width !== this.width || height !== this.height)
+        {
+            this.width = width;
+            this.height = height;
+
+            this.canvas.width = width;
+            this.canvas.height = height;
+
+            if (this._swapCanvas !== undefined)
+            {
+                this._swapCanvas.width = width;
+                this._swapCanvas.height = height;
+            }
+
+            this.baseTexture.width = width;
+            this.baseTexture.height = height;
+
+            this.textureFrame.width = width;
+            this.textureFrame.height = height;
+
+            this.texture.width = width;
+            this.texture.height = height;
+
+            this.texture.crop.width = width;
+            this.texture.crop.height = height;
+
+            this.update();
+            this.dirty = true;
+        }
+
+        return this;
+
+    },
+
+    /**
+    * This re-creates the BitmapData.imageData from the current context.
+    * It then re-builds the ArrayBuffer, the data Uint8ClampedArray reference and the pixels Int32Array.
+    * If not given the dimensions defaults to the full size of the context.
+    *
+    * Warning: This is a very expensive operation, so use it sparingly.
+    *
+    * @method Phaser.BitmapData#update
+    * @param {number} [x=0] - The x coordinate of the top-left of the image data area to grab from.
+    * @param {number} [y=0] - The y coordinate of the top-left of the image data area to grab from.
+    * @param {number} [width=1] - The width of the image data area.
+    * @param {number} [height=1] - The height of the image data area.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    update: function (x, y, width, height) {
+
+        if (x === undefined) { x = 0; }
+        if (y === undefined) { y = 0; }
+        if (width === undefined) { width = Math.max(1, this.width); }
+        if (height === undefined) { height = Math.max(1, this.height); }
+
+        this.imageData = this.context.getImageData(x, y, width, height);
+        this.data = this.imageData.data;
+
+        if (this.imageData.data.buffer)
+        {
+            this.buffer = this.imageData.data.buffer;
+            this.pixels = new Uint32Array(this.buffer);
+        }
+        else
+        {
+            if (window['ArrayBuffer'])
+            {
+                this.buffer = new ArrayBuffer(this.imageData.data.length);
+                this.pixels = new Uint32Array(this.buffer);
+            }
+            else
+            {
+                this.pixels = this.imageData.data;
             }
         }
 
+        return this;
+
     },
 
     /**
-    * Clears the BitmapData.
-    * @method Phaser.BitmapData#clear
+    * Scans through the area specified in this BitmapData and sends a color object for every pixel to the given callback.
+    * The callback will be sent a color object with 6 properties: `{ r: number, g: number, b: number, a: number, color: number, rgba: string }`.
+    * Where r, g, b and a are integers between 0 and 255 representing the color component values for red, green, blue and alpha.
+    * The `color` property is an Int32 of the full color. Note the endianess of this will change per system.
+    * The `rgba` property is a CSS style rgba() string which can be used with context.fillStyle calls, among others.
+    * The callback will also be sent the pixels x and y coordinates respectively.
+    * The callback must return either `false`, in which case no change will be made to the pixel, or a new color object.
+    * If a new color object is returned the pixel will be set to the r, g, b and a color values given within it.
+    *
+    * @method Phaser.BitmapData#processPixelRGB
+    * @param {function} callback - The callback that will be sent each pixel color object to be processed.
+    * @param {object} callbackContext - The context under which the callback will be called.
+    * @param {number} [x=0] - The x coordinate of the top-left of the region to process from.
+    * @param {number} [y=0] - The y coordinate of the top-left of the region to process from.
+    * @param {number} [width] - The width of the region to process.
+    * @param {number} [height] - The height of the region to process.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    clear: function () {
+    processPixelRGB: function (callback, callbackContext, x, y, width, height) {
 
-        this.context.clearRect(0, 0, this.width, this.height);
-    
-        this._dirty = true;
+        if (x === undefined) { x = 0; }
+        if (y === undefined) { y = 0; }
+        if (width === undefined) { width = this.width; }
+        if (height === undefined) { height = this.height; }
+
+        var w = x + width;
+        var h = y + height;
+        var pixel = Phaser.Color.createColor();
+        var result = { r: 0, g: 0, b: 0, a: 0 };
+        var dirty = false;
+
+        for (var ty = y; ty < h; ty++)
+        {
+            for (var tx = x; tx < w; tx++)
+            {
+                Phaser.Color.unpackPixel(this.getPixel32(tx, ty), pixel);
+
+                result = callback.call(callbackContext, pixel, tx, ty);
+
+                if (result !== false && result !== null && result !== undefined)
+                {
+                    this.setPixel32(tx, ty, result.r, result.g, result.b, result.a, false);
+                    dirty = true;
+                }
+            }
+        }
+
+        if (dirty)
+        {
+            this.context.putImageData(this.imageData, 0, 0);
+            this.dirty = true;
+        }
+
+        return this;
 
     },
 
-    refreshBuffer: function () {
+    /**
+    * Scans through the area specified in this BitmapData and sends the color for every pixel to the given callback along with its x and y coordinates.
+    * Whatever value the callback returns is set as the new color for that pixel, unless it returns the same color, in which case it's skipped.
+    * Note that the format of the color received will be different depending on if the system is big or little endian.
+    * It is expected that your callback will deal with endianess. If you'd rather Phaser did it then use processPixelRGB instead.
+    * The callback will also be sent the pixels x and y coordinates respectively.
+    *
+    * @method Phaser.BitmapData#processPixel
+    * @param {function} callback - The callback that will be sent each pixel color to be processed.
+    * @param {object} callbackContext - The context under which the callback will be called.
+    * @param {number} [x=0] - The x coordinate of the top-left of the region to process from.
+    * @param {number} [y=0] - The y coordinate of the top-left of the region to process from.
+    * @param {number} [width] - The width of the region to process.
+    * @param {number} [height] - The height of the region to process.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    processPixel: function (callback, callbackContext, x, y, width, height) {
 
-        this.imageData = this.context.getImageData(0, 0, this.width, this.height);
-        this.pixels = new Int32Array(this.imageData.data.buffer);
+        if (x === undefined) { x = 0; }
+        if (y === undefined) { y = 0; }
+        if (width === undefined) { width = this.width; }
+        if (height === undefined) { height = this.height; }
 
-        // this.data8 = new Uint8ClampedArray(this.imageData.buffer);
-        // this.data32 = new Uint32Array(this.imageData.buffer);
+        var w = x + width;
+        var h = y + height;
+        var pixel = 0;
+        var result = 0;
+        var dirty = false;
+
+        for (var ty = y; ty < h; ty++)
+        {
+            for (var tx = x; tx < w; tx++)
+            {
+                pixel = this.getPixel32(tx, ty);
+                result = callback.call(callbackContext, pixel, tx, ty);
+
+                if (result !== pixel)
+                {
+                    this.pixels[ty * this.width + tx] = result;
+                    dirty = true;
+                }
+            }
+        }
+
+        if (dirty)
+        {
+            this.context.putImageData(this.imageData, 0, 0);
+            this.dirty = true;
+        }
+
+        return this;
+
+    },
+
+    /**
+    * Replaces all pixels matching one color with another. The color values are given as two sets of RGBA values.
+    * An optional region parameter controls if the replacement happens in just a specific area of the BitmapData or the entire thing. 
+    *
+    * @method Phaser.BitmapData#replaceRGB
+    * @param {number} r1 - The red color value to be replaced. Between 0 and 255.
+    * @param {number} g1 - The green color value to be replaced. Between 0 and 255.
+    * @param {number} b1 - The blue color value to be replaced. Between 0 and 255.
+    * @param {number} a1 - The alpha color value to be replaced. Between 0 and 255.
+    * @param {number} r2 - The red color value that is the replacement color. Between 0 and 255.
+    * @param {number} g2 - The green color value that is the replacement color. Between 0 and 255.
+    * @param {number} b2 - The blue color value that is the replacement color. Between 0 and 255.
+    * @param {number} a2 - The alpha color value that is the replacement color. Between 0 and 255.
+    * @param {Phaser.Rectangle} [region] - The area to perform the search over. If not given it will replace over the whole BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    replaceRGB: function (r1, g1, b1, a1, r2, g2, b2, a2, region) {
+
+        var sx = 0;
+        var sy = 0;
+        var w = this.width;
+        var h = this.height;
+        var source = Phaser.Color.packPixel(r1, g1, b1, a1);
+
+        if (region !== undefined && region instanceof Phaser.Rectangle)
+        {
+            sx = region.x;
+            sy = region.y;
+            w = region.width;
+            h = region.height;
+        }
+
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                if (this.getPixel32(sx + x, sy + y) === source)
+                {
+                    this.setPixel32(sx + x, sy + y, r2, g2, b2, a2, false);
+                }
+            }
+        }
+
+        this.context.putImageData(this.imageData, 0, 0);
+        this.dirty = true;
+
+        return this;
+
+    },
+
+    /**
+    * Sets the hue, saturation and lightness values on every pixel in the given region, or the whole BitmapData if no region was specified.
+    *
+    * @method Phaser.BitmapData#setHSL
+    * @param {number} [h=null] - The hue, in the range 0 - 1.
+    * @param {number} [s=null] - The saturation, in the range 0 - 1.
+    * @param {number} [l=null] - The lightness, in the range 0 - 1.
+    * @param {Phaser.Rectangle} [region] - The area to perform the operation on. If not given it will run over the whole BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    setHSL: function (h, s, l, region) {
+        
+        var bHaveH = h || h === 0;
+        var bHaveS = s || s === 0;
+        var bHaveL = l || l === 0;
+
+        if (!bHaveH && !bHaveS && !bHaveL)
+        {
+            return;
+        }
+
+        if (region === undefined)
+        {
+            region = new Phaser.Rectangle(0, 0, this.width, this.height);
+        }
+
+        var pixel = Phaser.Color.createColor();
+
+        for (var y = region.y; y < region.bottom; y++)
+        {
+            for (var x = region.x; x < region.right; x++)
+            {
+                Phaser.Color.unpackPixel(this.getPixel32(x, y), pixel, true);
+
+                if (bHaveH)
+                {
+                    pixel.h = h;
+                }
+
+                if (bHaveS)
+                {
+                    pixel.s = s;
+                }
+
+                if (bHaveL)
+                {
+                    pixel.l = l;
+                }
+
+                Phaser.Color.HSLtoRGB(pixel.h, pixel.s, pixel.l, pixel);
+                this.setPixel32(x, y, pixel.r, pixel.g, pixel.b, pixel.a, false);
+            }
+        }
+
+        this.context.putImageData(this.imageData, 0, 0);
+        this.dirty = true;
+
+        return this;
+
+    },
+
+    /**
+    * Shifts any or all of the hue, saturation and lightness values on every pixel in the given region, or the whole BitmapData if no region was specified.
+    * Shifting will add the given value onto the current h, s and l values, not replace them.
+    * The hue is wrapped to keep it within the range 0 to 1. Saturation and lightness are clamped to not exceed 1.
+    *
+    * @method Phaser.BitmapData#shiftHSL
+    * @param {number} [h=null] - The amount to shift the hue by.
+    * @param {number} [s=null] - The amount to shift the saturation by.
+    * @param {number} [l=null] - The amount to shift the lightness by.
+    * @param {Phaser.Rectangle} [region] - The area to perform the operation on. If not given it will run over the whole BitmapData.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    shiftHSL: function (h, s, l, region) {
+
+        if (h === undefined || h === null) { h = false; }
+        if (s === undefined || s === null) { s = false; }
+        if (l === undefined || l === null) { l = false; }
+
+        if (!h && !s && !l)
+        {
+            return;
+        }
+
+        if (region === undefined)
+        {
+            region = new Phaser.Rectangle(0, 0, this.width, this.height);
+        }
+
+        var pixel = Phaser.Color.createColor();
+
+        for (var y = region.y; y < region.bottom; y++)
+        {
+            for (var x = region.x; x < region.right; x++)
+            {
+                Phaser.Color.unpackPixel(this.getPixel32(x, y), pixel, true);
+
+                if (h)
+                {
+                    pixel.h = this.game.math.wrap(pixel.h + h, 0, 1);
+                }
+
+                if (s)
+                {
+                    pixel.s = this.game.math.clamp(pixel.s + s, 0, 1);
+                }
+
+                if (l)
+                {
+                    pixel.l = this.game.math.clamp(pixel.l + l, 0, 1);
+                }
+
+                Phaser.Color.HSLtoRGB(pixel.h, pixel.s, pixel.l, pixel);
+                this.setPixel32(x, y, pixel.r, pixel.g, pixel.b, pixel.a, false);
+            }
+        }
+
+        this.context.putImageData(this.imageData, 0, 0);
+        this.dirty = true;
+
+        return this;
 
     },
 
     /**
     * Sets the color of the given pixel to the specified red, green, blue and alpha values.
+    *
     * @method Phaser.BitmapData#setPixel32
-    * @param {number} x - The X coordinate of the pixel to be set.
-    * @param {number} y - The Y coordinate of the pixel to be set.
+    * @param {number} x - The x coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {number} y - The y coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
     * @param {number} red - The red color value, between 0 and 0xFF (255).
     * @param {number} green - The green color value, between 0 and 0xFF (255).
     * @param {number} blue - The blue color value, between 0 and 0xFF (255).
     * @param {number} alpha - The alpha color value, between 0 and 0xFF (255).
+    * @param {boolean} [immediate=true] - If `true` the context.putImageData will be called and the dirty flag set.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    setPixel32: function (x, y, red, green, blue, alpha) {
+    setPixel32: function (x, y, red, green, blue, alpha, immediate) {
+
+        if (immediate === undefined) { immediate = true; }
 
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height)
         {
-            this.pixels[y * this.width + x] = (alpha << 24) | (blue << 16) | (green << 8) | red;
-
-            /*
-            if (this.isLittleEndian)
+            if (Phaser.Device.LITTLE_ENDIAN)
             {
-                this.data32[y * this.width + x] = (alpha << 24) | (blue << 16) | (green << 8) | red;
+                this.pixels[y * this.width + x] = (alpha << 24) | (blue << 16) | (green << 8) | red;
             }
             else
             {
-                this.data32[y * this.width + x] = (red << 24) | (green << 16) | (blue << 8) | alpha;
+                this.pixels[y * this.width + x] = (red << 24) | (green << 16) | (blue << 8) | alpha;
             }
-           */
 
-            // this.imageData.data.set(this.data8);
-
-            this.context.putImageData(this.imageData, 0, 0);
-
-            this._dirty = true;
+            if (immediate)
+            {
+                this.context.putImageData(this.imageData, 0, 0);
+                this.dirty = true;
+            }
         }
+
+        return this;
 
     },
 
     /**
     * Sets the color of the given pixel to the specified red, green and blue values.
+    *
     * @method Phaser.BitmapData#setPixel
-    * @param {number} x - The X coordinate of the pixel to be set.
-    * @param {number} y - The Y coordinate of the pixel to be set.
-    * @param {number} red - The red color value (between 0 and 255)
-    * @param {number} green - The green color value (between 0 and 255)
-    * @param {number} blue - The blue color value (between 0 and 255)
+    * @param {number} x - The x coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {number} y - The y coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {number} red - The red color value, between 0 and 0xFF (255).
+    * @param {number} green - The green color value, between 0 and 0xFF (255).
+    * @param {number} blue - The blue color value, between 0 and 0xFF (255).
+    * @param {boolean} [immediate=true] - If `true` the context.putImageData will be called and the dirty flag set.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    setPixel: function (x, y, red, green, blue) {
+    setPixel: function (x, y, red, green, blue, immediate) {
 
-        this.setPixel32(x, y, red, green, blue, 255);
+        return this.setPixel32(x, y, red, green, blue, 255, immediate);
 
     },
 
     /**
-    * Get a color of a specific pixel.
-    * @param {number} x - The X coordinate of the pixel to get.
-    * @param {number} y - The Y coordinate of the pixel to get.
-    * @return {number} A native color value integer (format: 0xRRGGBB)
+    * Get the color of a specific pixel in the context into a color object.
+    * If you have drawn anything to the BitmapData since it was created you must call BitmapData.update to refresh the array buffer,
+    * otherwise this may return out of date color values, or worse - throw a run-time error as it tries to access an array element that doesn't exist.
+    *
+    * @method Phaser.BitmapData#getPixel
+    * @param {number} x - The x coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {number} y - The y coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {object} [out] - An object into which 4 properties will be created: r, g, b and a. If not provided a new object will be created.
+    * @return {object} An object with the red, green, blue and alpha values set in the r, g, b and a properties.
     */
-    getPixel: function (x, y) {
+    getPixel: function (x, y, out) {
 
-        if (x >= 0 && x <= this.width && y >= 0 && y <= this.height)
+        if (!out)
         {
-            return this.data32[y * this.width + x];
+            out = Phaser.Color.createColor();
         }
 
+        var index = ~~(x + (y * this.width));
+
+        index *= 4;
+
+        out.r = this.data[index];
+        out.g = this.data[++index];
+        out.b = this.data[++index];
+        out.a = this.data[++index];
+
+        return out;
+
     },
 
     /**
-    * Get a color of a specific pixel (including alpha value).
-    * @param {number} x - The X coordinate of the pixel to get.
-    * @param {number} y - The Y coordinate of the pixel to get.
+    * Get the color of a specific pixel including its alpha value.
+    * If you have drawn anything to the BitmapData since it was created you must call BitmapData.update to refresh the array buffer,
+    * otherwise this may return out of date color values, or worse - throw a run-time error as it tries to access an array element that doesn't exist.
+    * Note that on little-endian systems the format is 0xAABBGGRR and on big-endian the format is 0xRRGGBBAA.
+    *
+    * @method Phaser.BitmapData#getPixel32
+    * @param {number} x - The x coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {number} y - The y coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
     * @return {number} A native color value integer (format: 0xAARRGGBB)
     */
     getPixel32: function (x, y) {
 
         if (x >= 0 && x <= this.width && y >= 0 && y <= this.height)
         {
-            return this.data32[y * this.width + x];
+            return this.pixels[y * this.width + x];
         }
 
     },
 
     /**
-    * Get pixels in array in a specific Rectangle.
-    * @param rect {Rectangle} The specific Rectangle.
-    * @return {array} CanvasPixelArray.
+    * Get the color of a specific pixel including its alpha value as a color object containing r,g,b,a and rgba properties.
+    * If you have drawn anything to the BitmapData since it was created you must call BitmapData.update to refresh the array buffer,
+    * otherwise this may return out of date color values, or worse - throw a run-time error as it tries to access an array element that doesn't exist.
+    *
+    * @method Phaser.BitmapData#getPixelRGB
+    * @param {number} x - The x coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {number} y - The y coordinate of the pixel to be set. Must lay within the dimensions of this BitmapData.
+    * @param {object} [out] - An object into which 3 properties will be created: r, g and b. If not provided a new object will be created.
+    * @param {boolean} [hsl=false] - Also convert the rgb values into hsl?
+    * @param {boolean} [hsv=false] - Also convert the rgb values into hsv?
+    * @return {object} An object with the red, green and blue values set in the r, g and b properties.
+    */
+    getPixelRGB: function (x, y, out, hsl, hsv) {
+
+        return Phaser.Color.unpackPixel(this.getPixel32(x, y), out, hsl, hsv);
+
+    },
+
+    /**
+    * Gets all the pixels from the region specified by the given Rectangle object.
+    *
+    * @method Phaser.BitmapData#getPixels
+    * @param {Phaser.Rectangle} rect - The Rectangle region to get.
+    * @return {ImageData} Returns a ImageData object containing a Uint8ClampedArray data property.
     */
     getPixels: function (rect) {
 
@@ -247,872 +1066,1379 @@ Phaser.BitmapData.prototype = {
     },
 
     /**
-    * Adds an arc to the path which is centered at (x, y) position with radius r starting at startAngle and ending at endAngle 
-    * going in the given direction by anticlockwise (defaulting to clockwise).
-    * @method Phaser.BitmapData#arc
-    * @param {number} x - The x axis of the coordinate for the arc's center
-    * @param {number} y - The y axis of the coordinate for the arc's center
-    * @param {number} radius - The arc's radius
-    * @param {number} startAngle - The starting point, measured from the x axis, from which it will be drawn, expressed in radians.
-    * @param {number} endAngle - The end arc's angle to which it will be drawn, expressed in radians.
-    * @param {boolean} [anticlockwise=true] - true draws the arc anticlockwise, otherwise in a clockwise direction.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    arc: function (x, y, radius, startAngle, endAngle, anticlockwise) {
-
-        if (typeof anticlockwise === 'undefined') { anticlockwise = false; }
-
-        this._dirty = true;
-        this.context.arc(x, y, radius, startAngle, endAngle, anticlockwise);
-        return this;
-
-    },
-
-    /**
-    * Adds an arc with the given control points and radius, connected to the previous point by a straight line.
-    * @method Phaser.BitmapData#arcTo
-    * @param {number} x1
-    * @param {number} y1
-    * @param {number} x2
-    * @param {number} y2
-    * @param {number} radius
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    arcTo: function (x1, y1, x2, y2, radius) {
-
-        this._dirty = true;
-        this.context.arcTo(x1, y1, x2, y2, radius);
-        return this;
-
-    },
-
-    /**
-    * Begins a fill with the specified color. This ends the current sub-path.
-    * @method Phaser.BitmapData#beginFill
-    * @param {string} color - A CSS compatible color value (ex. "red", "#FF0000", or "rgba(255,0,0,0.5)"). Setting to null will result in no fill.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    beginFill: function (color) {
-
-        this.fillStyle(color);
-
-        return this;
-
-    },
-
-    /**
-    * Begins a linear gradient fill defined by the line (x0, y0) to (x1, y1). This ends the current sub-path. For
-    * example, the following code defines a black to white vertical gradient ranging from 20px to 120px, and draws a square to display it:
-    *
-    *      ```myGraphics.beginLinearGradientFill(["#000","#FFF"], [0, 1], 0, 20, 0, 120).rect(20, 20, 120, 120);```
-    *
-    * @method Phaser.BitmapData#beginLinearGradientFill
-    * @param {Array} colors - An array of CSS compatible color values. For example, ["#F00","#00F"] would define a gradient drawing from red to blue.
-    * @param {Array} ratios - An array of gradient positions which correspond to the colors. For example, [0.1, 0.9] would draw the first color to 10% then interpolating to the second color at 90%.
-    * @param {number} x0 - The position of the first point defining the line that defines the gradient direction and size.
-    * @param {number} y0 - The position of the first point defining the line that defines the gradient direction and size.
-    * @param {number} x1 - The position of the second point defining the line that defines the gradient direction and size.
-    * @param {number} y1 - The position of the second point defining the line that defines the gradient direction and size.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    beginLinearGradientFill: function (colors, ratios, x0, y0, x1, y1) {
-
-        var gradient = this.createLinearGradient(x0, y0, x1, y1);
-
-        for (var i = 0, len = colors.length; i < len; i++)
-        {
-            gradient.addColorStop(ratios[i], colors[i]);
-        }
-
-        this.fillStyle(gradient);
-
-        return this;
-
-    },
-
-    /**
-    * Begins a linear gradient stroke defined by the line (x0, y0) to (x1, y1). This ends the current sub-path. For
-    * example, the following code defines a black to white vertical gradient ranging from 20px to 120px, and draws a
-    * square to display it:
-    *
-    *      ```myGraphics.setStrokeStyle(10).beginLinearGradientStroke(["#000","#FFF"], [0, 1], 0, 20, 0, 120).drawRect(20, 20, 120, 120);```
-    *
-    * @method Phaser.BitmapData#beginLinearGradientStroke
-    * @param {Array} colors - An array of CSS compatible color values. For example, ["#F00","#00F"] would define a gradient drawing from red to blue.
-    * @param {Array} ratios - An array of gradient positions which correspond to the colors. For example, [0.1, 0.9] would draw the first color to 10% then interpolating to the second color at 90%.
-    * @param {number} x0 - The position of the first point defining the line that defines the gradient direction and size.
-    * @param {number} y0 - The position of the first point defining the line that defines the gradient direction and size.
-    * @param {number} x1 - The position of the second point defining the line that defines the gradient direction and size.
-    * @param {number} y1 - The position of the second point defining the line that defines the gradient direction and size.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    beginLinearGradientStroke: function (colors, ratios, x0, y0, x1, y1) {
-
-        var gradient = this.createLinearGradient(x0, y0, x1, y1);
-
-        for (var i = 0, len = colors.length; i < len; i++)
-        {
-            gradient.addColorStop(ratios[i], colors[i]);
-        }
-
-        this.strokeStyle(gradient);
-
-        return this;
-
-    },
-
-    /**
-    * Begins a radial gradient stroke. This ends the current sub-path. For example, the following code defines a red to
-    * blue radial gradient centered at (100, 100), with a radius of 50, and draws a rectangle to display it:
-    *
-    *      myGraphics.setStrokeStyle(10)
-    *          .beginRadialGradientStroke(["#F00","#00F"], [0, 1], 100, 100, 0, 100, 100, 50)
-    *          .drawRect(50, 90, 150, 110);
-    *
-    * @method Phaser.BitmapData#beginRadialGradientStroke
-    * @param {Array} colors - An array of CSS compatible color values. For example, ["#F00","#00F"] would define a gradient drawing from red to blue.
-    * @param {Array} ratios - An array of gradient positions which correspond to the colors. For example, [0.1, 0.9] would draw the first color to 10% then interpolating to the second color at 90%.
-    * @param {number} x0 - Center position of the inner circle that defines the gradient.
-    * @param {number} y0 - Center position of the inner circle that defines the gradient.
-    * @param {number} r0 - Radius of the inner circle that defines the gradient.
-    * @param {number} x1 - Center position of the outer circle that defines the gradient.
-    * @param {number} y1 - Center position of the outer circle that defines the gradient.
-    * @param {number} r1 - Radius of the outer circle that defines the gradient.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    beginRadialGradientStroke: function (colors, ratios, x0, y0, r0, x1, y1, r1) {
-
-        var gradient = this.createRadialGradient(x0, y0, r0, x1, y1, r1);
-
-        for (var i = 0, len = colors.length; i < len; i++)
-        {
-            gradient.addColorStop(ratios[i], colors[i]);
-        }
-
-        this.strokeStyle(gradient);
-
-        return this;
-
-    },
-
-    /**
-    * Starts a new path by resetting the list of sub-paths. Call this method when you want to create a new path.
-    * @method Phaser.BitmapData#beginPath
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    beginPath: function () {
-
-        this.context.beginPath();
-        return this;
-
-    },
-
-    /**
-    * Begins a stroke with the specified color. This ends the current sub-path.
-    * @method Phaser.BitmapData#beginStroke
-    * @param {String} color A CSS compatible color value (ex. "#FF0000", "red", or "rgba(255,0,0,0.5)"). Setting to null will result in no stroke.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    beginStroke: function (color) {
-
-        this.strokeStyle(color);
-        return this;
-
-    },
-
-    /**
-    * Adds a bezier curve from the current context point to (x, y) using the control points (cp1x, cp1y) and (cp2x, cp2y).
-    * @method Phaser.BitmapData#bezierCurveTo
-    * @param {number} cp1x - The x axis of control point 1.
-    * @param {number} cp1y - The y axis of control point 1.
-    * @param {number} cp2x - The x axis of control point 2.
-    * @param {number} cp2y - The y axis of control point 2.
-    * @param {number} x - The x axis of the ending point.
-    * @param {number} y - The y axis of the ending point.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    bezierCurveTo: function (cp1x, cp1y, cp2x, cp2y, x, y) {
-
-        this._dirty = true;
-        this.context.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, x, y);
-        return this;
-
-    },
-
-    /**
-    * Draws a circle with the specified radius at (x, y).
-    * @method Phaser.BitmapData#circle
-    * @param {number} x - x coordinate center point of circle.
-    * @param {number} y - y coordinate center point of circle.
-    * @param {number} radius - Radius of circle in radians.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    circle: function (x, y, radius) {
-
-        this.arc(x, y, radius, 0, Math.PI*2);
-        return this;
-
-    },
-
-    /**
-    * Sets all pixels in the rectangle defined by starting point (x, y) and size (width, height) to transparent black.
-    * @method Phaser.BitmapData#clearRect
-    * @param {number} x - The x axis of the coordinate for the rectangle starting point.
-    * @param {number} y - The y axis of the coordinate for the rectangle starting point.
-    * @param {number} width - The rectangles width.
-    * @param {number} height - The rectangles height.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    clearRect: function (x, y, width, height) {
-
-        this._dirty = true;
-        this.context.clearRect(x, y, width, height);
-        return this;
-
-    },
-
-    /**
-    * Creates a clipping path from the current sub-paths. Everything drawn after clip() is called appears inside the clipping path only.
-    * @method Phaser.BitmapData#clip
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    clip: function () {
-
-        this._dirty = true;
-        this.context.clip();
-        return this;
-
-    },
-
-    /**
-    * Tries to draw a straight line from the current point to the start. If the shape has already been closed or has only one point, this function does nothing.
-    * @method Phaser.BitmapData#closePath
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    closePath: function () {
-
-        this._dirty = true;
-        this.context.closePath();
-        return this;
-
-    },
-
-    /**
-    * Creates a linear gradient with defined by an imaginary line which implies the direction of the gradient.
-    * Once the gradient is created colors can be inserted using the addColorStop method.
-    * @method Phaser.BitmapData#createLinearGradient
-    * @param {number} x - The x axis of the coordinate for the gradients starting point.
-    * @param {number} y - The y axis of the coordinate for the gradients starting point.
-    * @param {number} width - The width of the gradient.
-    * @param {number} height - The height of the gradient.
-    * @return {CanvasGradient} The Linear Gradient.
-    */
-    createLinearGradient: function (x, y, width, height) {
-
-        return this.context.createLinearGradient(x, y, width, height);
-
-    },
-
-    //  createPattern
-
-    /**
-    * Creates a radial gradient.
-    * @method Phaser.BitmapData#createRadialGradient
-    * @param {number} x0
-    * @param {number} y0
-    * @param {number} r0
-    * @param {number} x1
-    * @param {number} y1
-    * @param {number} r1
-    * @return {CanvasGradient} The Radial Gradient.
-    */
-    createRadialGradient: function (x0, y0, r0, x1, y1, r1) {
-
-        return this.context.createRadialGradient(x0, y0, r0, x1, y1, r1);
-
-    },
-
-    //  drawImage
-    //  drawSystemFocusRing (?)
-
-    /**
-    * Draws an ellipse (oval) with a specified width (w) and height (h).
-    * @method Phaser.BitmapData#ellipse
-    * @param {number} x - x coordinate center point of ellipse.
-    * @param {number} y - y coordinate center point of ellipse.
-    * @param {number} w - height (horizontal diameter) of ellipse. The horizontal radius will be half of this number.
-    * @param {number} h - width (vertical diameter) of ellipse. The vertical radius will be half of this number.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    ellipse: function (x, y, w, h) {
-
-        var k = 0.5522848;
-        var ox = (w / 2) * k;
-        var oy = (h / 2) * k;
-        var xe = x + w;
-        var ye = y + h;
-        var xm = x + w / 2;
-        var ym = y + h / 2;
-            
-        this.moveTo(x, ym);
-        this.bezierCurveTo(x, ym - oy, xm - ox, y, xm, y);
-        this.bezierCurveTo(xm + ox, y, xe, ym - oy, xe, ym);
-        this.bezierCurveTo(xe, ym + oy, xm + ox, ye, xm, ye);
-        this.bezierCurveTo(xm - ox, ye, x, ym + oy, x, ym);
-
-        return this;
-
-    },
-
-    /**
-    * Fills the subpaths with the current fill style.
-    * @method Phaser.BitmapData#fill
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    fill: function () {
-
-        this._dirty = true;
-        this.context.fill();
-        return this;
-
-    },
-
-    /**
-    * Draws a filled rectangle at (x, y) position whose size is determined by width and height.
-    * @method Phaser.BitmapData#fillRect
-    * @param {number} x - The x axis of the coordinate for the rectangle starting point.
-    * @param {number} y - The y axis of the coordinate for the rectangle starting point.
-    * @param {number} width - The rectangles width.
-    * @param {number} height - The rectangles height.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    fillRect: function (x, y, width, height) {
-
-        this._dirty = true;
-        this.context.fillRect(x, y, width, height);
-        return this;
-
-    },
-
-    /**
-    * Sets the fill style.
-    * @method Phaser.BitmapData#fillStyle
-    * @param {string} color - The fill color value in CSS format: #RRGGBB or rgba(r,g,b,a)
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    fillStyle: function (color) {
-
-        this.context.fillStyle = color;
-        return this;
-
-    },
-
-    //  fillText
-
-    /**
-    * Sets the font.
-    * @method Phaser.BitmapData#font
-    * @param {DOMString} font - The font to be used for any text rendering. Default value 10px sans-serif.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    font: function (font) {
-
-        this.context.font = font;
-        return this;
-
-    },
-
-    /**
-    * Alpha value that is applied to shapes and images before they are composited onto the canvas. Default 1.0 (opaque).
-    * @method Phaser.BitmapData#globalAlpha
-    * @param {number} alpha - Alpha value that is applied to shapes and images before they are composited onto the canvas. Default 1.0 (opaque).
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    globalAlpha: function (alpha) {
-
-        this.context.globalAlpha = alpha;
-        return this;
-
-    },
-
-    /**
-    * With globalAlpha applied this sets how shapes and images are drawn onto the existing bitmap. Possible values: source-atop, source-in, source-out,
-    * source-over (default), destination-atop, destination-in, destination-out, destination-over, lighter, darker, copy and xor.
-    * @method Phaser.BitmapData#globalCompositeOperation
-    * @param {DOMString} operation - The composite operation to apply.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    globalCompositeOperation: function (operation) {
-
-        this.context.globalCompositeOperation = operation;
-        return this;
-
-    },
-
-    /**
-    * Type of endings on the end of lines. Possible values: butt (default), round, square.
-    * @method Phaser.BitmapData#lineCap
-    * @param {DOMString} style - Possible values: butt (default), round, square
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    lineCap: function (style) {
-
-        this.context.lineCap = style;
-        return this;
-
-    },
-
-    /**
-    * Specifies where to start a dasharray on a line.
-    * @method Phaser.BitmapData#lineDashOffset
-    * @param {number} offset - Specifies where to start a dasharray on a line.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    lineDashOffset: function (offset) {
-
-        this.context.lineDashOffset = offset;
-        return this;
-
-    },
-
-    /**
-    * Defines the type of corners where two lines meet. Possible values: round, bevel, miter (default)
-    * @method Phaser.BitmapData#lineJoin
-    * @param {DOMString} join - Possible values: round, bevel, miter (default)
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    lineJoin: function (join) {
-
-        this.context.lineJoin = join;
-        return this;
-
-    },
-
-    /**
-    * Width of lines. Default 1.0
-    * @method Phaser.BitmapData#lineWidth
-    * @param {number} width - Width of lines. Default 1.0
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    lineWidth: function (width) {
-
-        this.context.lineWidth = width;
-        return this;
-
-    },
-
-    /**
-    * Default 10.
-    * @method Phaser.BitmapData#miterLimit
-    * @param {number} limit - Default 10.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    miterLimit: function (limit) {
-
-        this.context.miterLimit = limit;
-        return this;
-
-    },
-
-    //  getImageData
-    //  getLineDash
-    //  isPointInPath
-    //  isPointInStroke
-
-    /**
-    * Connects the last point in the subpath to the x, y coordinates with a straight line.
-    * @method Phaser.BitmapData#lineTo
-    * @param {number} x - The x axis of the coordinate for the end of the line.
-    * @param {number} y - The y axis of the coordinate for the end of the line.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    lineTo: function (x, y) {
-
-        this._dirty = true;
-        this.context.lineTo(x, y);
-        return this;
-
-    },
-
-    //  measureText
-
-    /**
-    * Moves the starting point of a new subpath to the (x, y) coordinates.
-    * @method Phaser.BitmapData#moveTo
-    * @param {number} x - The x axis of the point.
-    * @param {number} y - The y axis of the point.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    moveTo: function (x, y) {
-
-        this.context.moveTo(x, y);
-        return this;
-
-    },
-
-    //  putImageData
-
-    /**
-    * Draws a quadratic curve from the current drawing point to (x, y) using the control point (cpx, cpy).
-    * @method Phaser.BitmapData#quadraticCurveTo
-    * @param {Number} cpx - The x axis of the control point.
-    * @param {Number} cpy - The y axis of the control point.
-    * @param {Number} x - The x axis of the ending point.
-    * @param {Number} y - The y axis of the ending point.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    quadraticCurveTo: function(cpx, cpy, x, y) {
-
-        this._dirty = true;
-        this.context.quadraticCurveTo(cpx, cpy, x, y);
-        return this;
-
-    },
-
-    /**
-    * Draws a rectangle at (x, y) position whose size is determined by width and height.
-    * @method Phaser.BitmapData#rect
-    * @param {number} x - The x axis of the coordinate for the rectangle starting point.
-    * @param {number} y - The y axis of the coordinate for the rectangle starting point.
-    * @param {number} width - The rectangles width.
-    * @param {number} height - The rectangles height.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    rect: function (x, y, width, height) {
-
-        this._dirty = true;
-        this.context.rect(x, y, width, height);
-        return this;
-
-    },
-    
-    /**
-    * Restores the drawing style state to the last element on the 'state stack' saved by save().
-    * @method Phaser.BitmapData#restore
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    restore: function () {
-
-        this._dirty = true;
-        this.context.restore();
-        return this;
-
-    },
-
-    /**
-    * Rotates the drawing context values by r radians.
-    * @method Phaser.BitmapData#rotate
-    * @param {number} angle - The angle of rotation given in radians.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    rotate: function (angle) {
-
-        this._dirty = true;
-        this.context.rotate(angle);
-        return this;
-
-    },
-
-    /**
-    * Sets the stroke style for the current sub-path. Like all drawing methods, this can be chained, so you can define
-    * the stroke style and color in a single line of code like so:
-    *
-    *      ```myGraphics.setStrokeStyle(8,"round").beginStroke("#F00");```
-    *
-    * @method Phaser.BitmapData#setStrokeStyle
-    * @param {number} thickness - The width of the stroke.
-    * @param {string|number} [caps=0] - Indicates the type of caps to use at the end of lines. One of butt, round, or square. Defaults to "butt". Also accepts the values 0 (butt), 1 (round), and 2 (square) for use with he tiny API.
-    * @param {string|number} [joints=0] Specifies the type of joints that should be used where two lines meet. One of bevel, round, or miter. Defaults to "miter". Also accepts the values 0 (miter), 1 (round), and 2 (bevel) for use with the tiny API.
-    * @param {number} [miterLimit=10] - If joints is set to "miter", then you can specify a miter limit ratio which controls at what point a mitered joint will be clipped.
-    * @param {boolean} [ignoreScale=false] - If true, the stroke will be drawn at the specified thickness regardless of active transformations.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    setStrokeStyle: function (thickness, caps, joints, miterLimit, ignoreScale) {
-
-        if (typeof thickness === 'undefined') { thickness = 1; }
-        if (typeof caps === 'undefined') { caps = 'butt'; }
-        if (typeof joints === 'undefined') { joints = 'miter'; }
-        if (typeof miterLimit === 'undefined') { miterLimit = 10; }
-
-        //  TODO
-        ignoreScale = false;
-
-        this.lineWidth(thickness);
-        this.lineCap(caps);
-        this.lineJoin(joints);
-        this.miterLimit(miterLimit);
-
-        return this;
-
-    },
-
-    /**
-    * Saves the current drawing style state using a stack so you can revert any change you make to it using restore().
-    * @method Phaser.BitmapData#save
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    save: function () {
-
-        this._dirty = true;
-        this.context.save();
-        return this;
-
-    },
-
-    /**
-    * Scales the current drawing context.
-    * @method Phaser.BitmapData#scale
-    * @param {number} x
-    * @param {number} y
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
-    */
-    scale: function (x, y) {
-
-        this._dirty = true;
-        this.context.scale(x, y);
-        return this;
-
-    },
-
-    /**
+    * Scans the BitmapData, pixel by pixel, until it encounters a pixel that isn't transparent (i.e. has an alpha value > 0).
+    * It then stops scanning and returns an object containing the color of the pixel in r, g and b properties and the location in the x and y properties.
     * 
-    * @method Phaser.BitmapData#scrollPathIntoView
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
+    * The direction parameter controls from which direction it should start the scan:
+    * 
+    * 0 = top to bottom
+    * 1 = bottom to top
+    * 2 = left to right
+    * 3 = right to left
+    *
+    * @method Phaser.BitmapData#getFirstPixel
+    * @param {number} [direction=0] - The direction in which to scan for the first pixel. 0 = top to bottom, 1 = bottom to top, 2 = left to right and 3 = right to left.
+    * @return {object} Returns an object containing the color of the pixel in the `r`, `g` and `b` properties and the location in the `x` and `y` properties.
     */
-    scrollPathIntoView: function () {
+    getFirstPixel: function (direction) {
 
-        this._dirty = true;
-        this.context.scrollPathIntoView();
-        return this;
+        if (direction === undefined) { direction = 0; }
+
+        var pixel = Phaser.Color.createColor();
+
+        var x = 0;
+        var y = 0;
+        var v = 1;
+        var scan = false;
+
+        if (direction === 1)
+        {
+            v = -1;
+            y = this.height;
+        }
+        else if (direction === 3)
+        {
+            v = -1;
+            x = this.width;
+        }
+
+        do {
+
+            Phaser.Color.unpackPixel(this.getPixel32(x, y), pixel);
+
+            if (direction === 0 || direction === 1)
+            {
+                //  Top to Bottom / Bottom to Top
+                x++;
+
+                if (x === this.width)
+                {
+                    x = 0;
+                    y += v;
+
+                    if (y >= this.height || y <= 0)
+                    {
+                        scan = true;
+                    }
+                }
+            }
+            else if (direction === 2 || direction === 3)
+            {
+                //  Left to Right / Right to Left
+                y++;
+
+                if (y === this.height)
+                {
+                    y = 0;
+                    x += v;
+
+                    if (x >= this.width || x <= 0)
+                    {
+                        scan = true;
+                    }
+                }
+            }
+        }
+        while (pixel.a === 0 && !scan);
+
+        pixel.x = x;
+        pixel.y = y;
+
+        return pixel;
 
     },
-
-    //  setLineDash
-    //  setTransform
 
     /**
-    * Strokes the subpaths with the current stroke style.
-    * @method Phaser.BitmapData#stroke
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
+    * Scans the BitmapData and calculates the bounds. This is a rectangle that defines the extent of all non-transparent pixels.
+    * The rectangle returned will extend from the top-left of the image to the bottom-right, excluding transparent pixels.
+    *
+    * @method Phaser.BitmapData#getBounds
+    * @param {Phaser.Rectangle} [rect] - If provided this Rectangle object will be populated with the bounds, otherwise a new object will be created.
+    * @return {Phaser.Rectangle} A Rectangle whose dimensions encompass the full extent of non-transparent pixels in this BitmapData.
     */
-    stroke: function () {
+    getBounds: function (rect) {
 
-        this._dirty = true;
-        this.context.stroke();
+        if (rect === undefined) { rect = new Phaser.Rectangle(); }
+
+        rect.x = this.getFirstPixel(2).x;
+
+        //  If we hit this, there's no point scanning any more, the image is empty
+        if (rect.x === this.width)
+        {
+            return rect.setTo(0, 0, 0, 0);
+        }
+
+        rect.y = this.getFirstPixel(0).y;
+        rect.width = (this.getFirstPixel(3).x - rect.x) + 1;
+        rect.height = (this.getFirstPixel(1).y - rect.y) + 1;
+
+        return rect;
+
+    },
+
+    /**
+    * Creates a new Phaser.Image object, assigns this BitmapData to be its texture, adds it to the world then returns it.
+    *
+    * @method Phaser.BitmapData#addToWorld
+    * @param {number} [x=0] - The x coordinate to place the Image at.
+    * @param {number} [y=0] - The y coordinate to place the Image at.
+    * @param {number} [anchorX=0] - Set the x anchor point of the Image. A value between 0 and 1, where 0 is the top-left and 1 is bottom-right.
+    * @param {number} [anchorY=0] - Set the y anchor point of the Image. A value between 0 and 1, where 0 is the top-left and 1 is bottom-right.
+    * @param {number} [scaleX=1] - The horizontal scale factor of the Image. A value of 1 means no scaling. 2 would be twice the size, and so on.
+    * @param {number} [scaleY=1] - The vertical scale factor of the Image. A value of 1 means no scaling. 2 would be twice the size, and so on.
+    * @return {Phaser.Image} The newly added Image object.
+    */
+    addToWorld: function (x, y, anchorX, anchorY, scaleX, scaleY) {
+
+        scaleX = scaleX || 1;
+        scaleY = scaleY || 1;
+
+        var image = this.game.add.image(x, y, this);
+
+        image.anchor.set(anchorX, anchorY);
+        image.scale.set(scaleX, scaleY);
+
+        return image;
+
+    },
+
+    /**
+     * Copies a rectangular area from the source object to this BitmapData. If you give `null` as the source it will copy from itself.
+     * 
+     * You can optionally resize, translate, rotate, scale, alpha or blend as it's drawn.
+     * 
+     * All rotation, scaling and drawing takes place around the regions center point by default, but can be changed with the anchor parameters.
+     * 
+     * Note that the source image can also be this BitmapData, which can create some interesting effects.
+     * 
+     * This method has a lot of parameters for maximum control.
+     * You can use the more friendly methods like `copyRect` and `draw` to avoid having to remember them all.
+     * 
+     * You may prefer to use `copyTransform` if you're simply trying to draw a Sprite to this BitmapData,
+     * and don't wish to translate, scale or rotate it from its original values.
+     *
+     * @method Phaser.BitmapData#copy
+     * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapData|Phaser.RenderTexture|Image|HTMLCanvasElement|string} [source] - The source to copy from. If you give a string it will try and find the Image in the Game.Cache first. This is quite expensive so try to provide the image itself.
+     * @param {number} [x=0] - The x coordinate representing the top-left of the region to copy from the source image.
+     * @param {number} [y=0] - The y coordinate representing the top-left of the region to copy from the source image.
+     * @param {number} [width] - The width of the region to copy from the source image. If not specified it will use the full source image width.
+     * @param {number} [height] - The height of the region to copy from the source image. If not specified it will use the full source image height.
+     * @param {number} [tx] - The x coordinate to translate to before drawing. If not specified it will default to the `x` parameter. If `null` and `source` is a Display Object, it will default to `source.x`.
+     * @param {number} [ty] - The y coordinate to translate to before drawing. If not specified it will default to the `y` parameter. If `null` and `source` is a Display Object, it will default to `source.y`.
+     * @param {number} [newWidth] - The new width of the block being copied. If not specified it will default to the `width` parameter.
+     * @param {number} [newHeight] - The new height of the block being copied. If not specified it will default to the `height` parameter.
+     * @param {number} [rotate=0] - The angle in radians to rotate the block to before drawing. Rotation takes place around the center by default, but can be changed with the `anchor` parameters.
+     * @param {number} [anchorX=0] - The anchor point around which the block is rotated and scaled. A value between 0 and 1, where 0 is the top-left and 1 is bottom-right.
+     * @param {number} [anchorY=0] - The anchor point around which the block is rotated and scaled. A value between 0 and 1, where 0 is the top-left and 1 is bottom-right.
+     * @param {number} [scaleX=1] - The horizontal scale factor of the block. A value of 1 means no scaling. 2 would be twice the size, and so on.
+     * @param {number} [scaleY=1] - The vertical scale factor of the block. A value of 1 means no scaling. 2 would be twice the size, and so on.
+     * @param {number} [alpha=1] - The alpha that will be set on the context before drawing. A value between 0 (fully transparent) and 1, opaque.
+     * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+     * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+     * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+     */
+    copy: function (source, x, y, width, height, tx, ty, newWidth, newHeight, rotate, anchorX, anchorY, scaleX, scaleY, alpha, blendMode, roundPx) {
+
+        if (source === undefined || source === null) { source = this; }
+
+        if (source instanceof Phaser.RenderTexture || source instanceof PIXI.RenderTexture)
+        {
+            source = source.getCanvas();
+        }
+
+        this._image = source;
+
+        if (source instanceof Phaser.Sprite || source instanceof Phaser.Image || source instanceof Phaser.Text || source instanceof PIXI.Sprite)
+        {
+            //  Copy over sprite values
+            this._pos.set(source.texture.crop.x, source.texture.crop.y);
+            this._size.set(source.texture.crop.width, source.texture.crop.height);
+            this._scale.set(source.scale.x, source.scale.y);
+            this._anchor.set(source.anchor.x, source.anchor.y);
+            this._rotate = source.rotation;
+            this._alpha.current = source.alpha;
+
+            if (source.texture instanceof Phaser.RenderTexture || source.texture instanceof PIXI.RenderTexture)
+            {
+                this._image = source.texture.getCanvas();
+            }
+            else
+            {
+                this._image = source.texture.baseTexture.source;
+            }
+
+            if (tx === undefined || tx === null) { tx = source.x; }
+            if (ty === undefined || ty === null) { ty = source.y; }
+
+            if (source.texture.trim)
+            {
+                //  Offset the translation coordinates by the trim amount
+                tx += source.texture.trim.x - source.anchor.x * source.texture.trim.width;
+                ty += source.texture.trim.y - source.anchor.y * source.texture.trim.height;
+            }
+
+            if (source.tint !== 0xFFFFFF)
+            {
+                if (source.cachedTint !== source.tint)
+                {
+                    source.cachedTint = source.tint;
+                    source.tintedTexture = PIXI.CanvasTinter.getTintedTexture(source, source.tint);
+                }
+
+                this._image = source.tintedTexture;
+                this._pos.set(0);
+            }
+        }
+        else
+        {
+            //  Reset
+            this._pos.set(0);
+            this._scale.set(1);
+            this._anchor.set(0);
+            this._rotate = 0;
+            this._alpha.current = 1;
+
+            if (source instanceof Phaser.BitmapData)
+            {
+                this._image = source.canvas;
+            }
+            else if (typeof source === 'string')
+            {
+                source = this.game.cache.getImage(source);
+
+                if (source === null)
+                {
+                    return;
+                }
+                else
+                {
+                    this._image = source;
+                }
+            }
+
+            this._size.set(this._image.width, this._image.height);
+        }
+
+        //  The source region to copy from
+        if (x === undefined || x === null) { x = 0; }
+        if (y === undefined || y === null) { y = 0; }
+
+        //  If they set a width/height then we override the frame values with them
+        if (width)
+        {
+            this._size.x = width;
+        }
+
+        if (height)
+        {
+            this._size.y = height;
+        }
+
+        //  The destination region to copy to
+        if (tx === undefined || tx === null) { tx = x; }
+        if (ty === undefined || ty === null) { ty = y; }
+        if (newWidth === undefined || newWidth === null) { newWidth = this._size.x; }
+        if (newHeight === undefined || newHeight === null) { newHeight = this._size.y; }
+
+        //  Rotation - if set this will override any potential Sprite value
+        if (typeof rotate === 'number')
+        {
+            this._rotate = rotate;
+        }
+
+        //  Anchor - if set this will override any potential Sprite value
+        if (typeof anchorX === 'number')
+        {
+            this._anchor.x = anchorX;
+        }
+
+        if (typeof anchorY === 'number')
+        {
+            this._anchor.y = anchorY;
+        }
+
+        //  Scaling - if set this will override any potential Sprite value
+        if (typeof scaleX === 'number')
+        {
+            this._scale.x = scaleX;
+        }
+
+        if (typeof scaleY === 'number')
+        {
+            this._scale.y = scaleY;
+        }
+
+        //  Effects
+        if (typeof alpha === 'number')
+        {
+            this._alpha.current = alpha;
+        }
+
+        if (blendMode === undefined) { blendMode = null; }
+        if (roundPx === undefined) { roundPx = false; }
+
+        if (this._alpha.current <= 0 || this._scale.x === 0 || this._scale.y === 0 || this._size.x === 0 || this._size.y === 0)
+        {
+            //  Why bother wasting CPU cycles drawing something you can't see?
+            return;
+        }
+
+        var ctx = this.context;
+
+        this._alpha.prev = ctx.globalAlpha;
+
+        ctx.save();
+
+        ctx.globalAlpha = this._alpha.current;
+
+        if (blendMode)
+        {
+            this.op = blendMode;
+        }
+
+        if (roundPx)
+        {
+            tx |= 0;
+            ty |= 0;
+        }
+
+        //  Doesn't work fully with children, or nested scale + rotation transforms (see copyTransform)
+        ctx.translate(tx, ty);
+
+        ctx.scale(this._scale.x, this._scale.y);
+
+        ctx.rotate(this._rotate);
+
+        ctx.drawImage(this._image, this._pos.x + x, this._pos.y + y, this._size.x, this._size.y, -newWidth * this._anchor.x, -newHeight * this._anchor.y, newWidth, newHeight);
+
+        //  Carry on ...
+
+        ctx.restore();
+
+        ctx.globalAlpha = this._alpha.prev;
+
+        this.dirty = true;
+
         return this;
 
     },
 
     /**
-    * Paints a rectangle which has a starting point at (x, y) and has a w width and an h height onto the canvas, using the current stroke style.
-    * @method Phaser.BitmapData#strokeRect
-    * @param {number} x - The x axis for the starting point of the rectangle.
-    * @param {number} y - The y axis for the starting point of the rectangle.
-    * @param {number} width - The rectangles width.
-    * @param {number} height - The rectangles height.
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
+    * Draws the given `source` Game Object to this BitmapData, using its `worldTransform` property to set the
+    * position, scale and rotation of where it is drawn. This function is used internally by `drawGroup`.
+    * It takes the objects tint and scale mode into consideration before drawing.
+    *
+    * You can optionally specify Blend Mode and Round Pixels arguments.
+    * 
+    * @method Phaser.BitmapData#copyTransform
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapData|Phaser.BitmapText} [source] - The Game Object to draw.
+    * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+    * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    strokeRect: function (x, y, width, height) {
+    copyTransform: function (source, blendMode, roundPx) {
 
-        this._dirty = true;
-        this.context.strokeRect(x, y, width, height);
+        if (blendMode === undefined) { blendMode = null; }
+        if (roundPx === undefined) { roundPx = false; }
+
+        if (!source.hasOwnProperty('worldTransform') || !source.worldVisible || source.worldAlpha === 0)
+        {
+            return this;
+        }
+
+        var wt = source.worldTransform;
+
+        this._pos.set(source.texture.crop.x, source.texture.crop.y);
+        this._size.set(source.texture.crop.width, source.texture.crop.height);
+
+        if (wt.a === 0 || wt.d === 0 || this._size.x === 0 || this._size.y === 0)
+        {
+             // Why bother wasting CPU cycles drawing something you can't see?
+            return this;
+        }
+
+        if (source.texture instanceof Phaser.RenderTexture || source.texture instanceof PIXI.RenderTexture)
+        {
+            this._image = source.texture.getCanvas();
+        }
+        else
+        {
+            this._image = source.texture.baseTexture.source;
+        }
+
+        var tx = wt.tx;
+        var ty = wt.ty;
+
+        if (source.texture.trim)
+        {
+            //  Offset the translation coordinates by the trim amount
+            tx += source.texture.trim.x - source.anchor.x * source.texture.trim.width;
+            ty += source.texture.trim.y - source.anchor.y * source.texture.trim.height;
+        }
+
+        if (source.tint !== 0xFFFFFF)
+        {
+            if (source.cachedTint !== source.tint)
+            {
+                source.cachedTint = source.tint;
+                source.tintedTexture = PIXI.CanvasTinter.getTintedTexture(source, source.tint);
+            }
+
+            this._image = source.tintedTexture;
+            this._pos.set(0);
+        }
+
+        if (roundPx)
+        {
+            tx |= 0;
+            ty |= 0;
+        }
+
+        var ctx = this.context;
+
+        this._alpha.prev = ctx.globalAlpha;
+
+        ctx.save();
+
+        ctx.globalAlpha = this._alpha.current;
+
+        if (blendMode)
+        {
+            this.op = blendMode;
+        }
+
+        ctx[this.smoothProperty] = (source.texture.baseTexture.scaleMode === PIXI.scaleModes.LINEAR);
+
+        ctx.setTransform(wt.a, wt.b, wt.c, wt.d, tx, ty);
+
+        ctx.drawImage(this._image,
+            this._pos.x,
+            this._pos.y,
+            this._size.x,
+            this._size.y,
+            -this._size.x * source.anchor.x,
+            -this._size.y * source.anchor.y,
+            this._size.x,
+            this._size.y);
+
+        ctx.restore();
+
+        ctx.globalAlpha = this._alpha.prev;
+
+        this.dirty = true;
+
         return this;
 
     },
 
     /**
-    * Color or style to use for the lines around shapes. Default #000 (black).
-    * @method Phaser.BitmapData#strokeStyle
-    * @param {string} style - Color or style to use for the lines around shapes. Default #000 (black).
-    * @return {Phaser.BitmapData} The BitmapData instance this method was called on.
+    * Copies the area defined by the Rectangle parameter from the source image to this BitmapData at the given location.
+    *
+    * @method Phaser.BitmapData#copyRect
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapData|Phaser.RenderTexture|Image|string} source - The Image to copy from. If you give a string it will try and find the Image in the Game.Cache.
+    * @param {Phaser.Rectangle} area - The Rectangle region to copy from the source image.
+    * @param {number} x - The destination x coordinate to copy the image to.
+    * @param {number} y - The destination y coordinate to copy the image to.
+    * @param {number} [alpha=1] - The alpha that will be set on the context before drawing. A value between 0 (fully transparent) and 1, opaque.
+    * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+    * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
-    strokeStyle: function (style) {
+    copyRect: function (source, area, x, y, alpha, blendMode, roundPx) {
 
-        this.context.strokeStyle = style;
+        return this.copy(source, area.x, area.y, area.width, area.height, x, y, area.width, area.height, 0, 0, 0, 1, 1, alpha, blendMode, roundPx);
+
+    },
+
+    /**
+    * Draws the given Phaser.Sprite, Phaser.Image or Phaser.Text to this BitmapData at the coordinates specified.
+    * You can use the optional width and height values to 'stretch' the sprite as it is drawn. This uses drawImage stretching, not scaling.
+    * 
+    * The children will be drawn at their `x` and `y` world space coordinates. If this is outside the bounds of the BitmapData they won't be visible.
+    * When drawing it will take into account the rotation, scale, scaleMode, alpha and tint values.
+    * 
+    * Note: You should ensure that at least 1 full update has taken place before calling this, 
+    * otherwise the objects are likely to render incorrectly, if at all.
+    * You can trigger an update yourself by calling `stage.updateTransform()` before calling `draw`.
+    *
+    * @method Phaser.BitmapData#draw
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.RenderTexture} source - The Sprite, Image or Text object to draw onto this BitmapData.
+    * @param {number} [x=0] - The x coordinate to translate to before drawing. If not specified it will default to `source.x`.
+    * @param {number} [y=0] - The y coordinate to translate to before drawing. If not specified it will default to `source.y`.
+    * @param {number} [width] - The new width of the Sprite being copied. If not specified it will default to `source.width`.
+    * @param {number} [height] - The new height of the Sprite being copied. If not specified it will default to `source.height`.
+    * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+    * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    draw: function (source, x, y, width, height, blendMode, roundPx) {
+
+        //  By specifying null for most parameters it will tell `copy` to use the Sprite values instead, which is what we want here
+        return this.copy(source, null, null, null, null, x, y, width, height, null, null, null, null, null, null, blendMode, roundPx);
+
+    },
+
+    /**
+    * Draws the immediate children of a Phaser.Group to this BitmapData.
+    * 
+    * It's perfectly valid to pass in `game.world` as the Group, and it will iterate through the entire display list.
+    * 
+    * Children are drawn _only_ if they have their `exists` property set to `true`, and have image, or RenderTexture, based Textures.
+    * 
+    * The children will be drawn at their `x` and `y` world space coordinates. If this is outside the bounds of the BitmapData they won't be visible.
+    * When drawing it will take into account the rotation, scale, scaleMode, alpha and tint values.
+    * 
+    * Note: You should ensure that at least 1 full update has taken place before calling this, 
+    * otherwise the objects are likely to render incorrectly, if at all.
+    * You can trigger an update yourself by calling `stage.updateTransform()` before calling `drawGroup`.
+    *
+    * @method Phaser.BitmapData#drawGroup
+    * @param {Phaser.Group} group - The Group to draw onto this BitmapData. Can also be Phaser.World.
+    * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+    * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    drawGroup: function (group, blendMode, roundPx) {
+
+        if (group.total > 0)
+        {
+            group.forEachExists(this.drawGroupProxy, this, blendMode, roundPx);
+        }
+
         return this;
 
     },
 
-    //  strokeText
-    //  transform
-    //  translate
+    /**
+    * A proxy for drawGroup that handles child iteration for more complex Game Objects.
+    * 
+    * @method Phaser.BitmapData#drawGroupProxy
+    * @private
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.BitmapText} child - The child to draw.
+    * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+    * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+    */
+    drawGroupProxy: function (child, blendMode, roundPx) {
+
+        if (child.hasOwnProperty('texture'))
+        {
+            this.copyTransform(child, blendMode, roundPx);
+        }
+
+        if (child.type === Phaser.GROUP && child.exists)
+        {
+            this.drawGroup(child, blendMode, roundPx);
+        }
+        else
+        {
+            if (child.hasOwnProperty('children') && child.children.length > 0)
+            {
+                for (var i = 0; i < child.children.length; i++)
+                {
+                    if (child.children[i].exists)
+                    {
+                        this.copyTransform(child.children[i], blendMode, roundPx);
+                    }
+                }
+            }
+        }
+
+    },
+
+    /**
+    * Draws the Game Object or Group to this BitmapData and then recursively iterates through all of its children.
+    * 
+    * If a child has an `exists` property then it (and its children) will be only be drawn if exists is `true`.
+    * 
+    * The children will be drawn at their `x` and `y` world space coordinates. If this is outside the bounds of the BitmapData 
+    * they won't be drawn. Depending on your requirements you may need to resize the BitmapData in advance to match the 
+    * bounds of the top-level Game Object.
+    * 
+    * When drawing it will take into account the child's world rotation, scale and alpha values.
+    *
+    * It's perfectly valid to pass in `game.world` as the parent object, and it will iterate through the entire display list.
+    * 
+    * Note: If you are trying to grab your entire game at the start of a State then you should ensure that at least 1 full update
+    * has taken place before doing so, otherwise all of the objects will render with incorrect positions and scales. You can 
+    * trigger an update yourself by calling `stage.updateTransform()` before calling `drawFull`.
+    *
+    * @method Phaser.BitmapData#drawFull
+    * @param {Phaser.World|Phaser.Group|Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapText} parent - The Game Object to draw onto this BitmapData and then recursively draw all of its children.
+    * @param {string} [blendMode=null] - The composite blend mode that will be used when drawing. The default is no blend mode at all. This is a Canvas globalCompositeOperation value such as 'lighter' or 'xor'.
+    * @param {boolean} [roundPx=false] - Should the x and y values be rounded to integers before drawing? This prevents anti-aliasing in some instances.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    drawFull: function (parent, blendMode, roundPx) {
+
+        if (parent.worldVisible === false || parent.worldAlpha === 0 || (parent.hasOwnProperty('exists') && parent.exists === false))
+        {
+            return this;
+        }
+
+        if (parent.type !== Phaser.GROUP && parent.type !== Phaser.EMITTER && parent.type !== Phaser.BITMAPTEXT)
+        {
+            if (parent.type === Phaser.GRAPHICS)
+            {
+                var bounds = parent.getBounds();
+                this.ctx.save();
+                this.ctx.translate(bounds.x, bounds.y);
+                PIXI.CanvasGraphics.renderGraphics(parent, this.ctx);
+                this.ctx.restore();
+            }
+            else
+            {
+                this.copy(parent, null, null, null, null, parent.worldPosition.x, parent.worldPosition.y, null, null, parent.worldRotation, null, null, parent.worldScale.x, parent.worldScale.y, parent.worldAlpha, blendMode, roundPx);
+            }
+        }
+
+        if (parent.children)
+        {
+            for (var i = 0; i < parent.children.length; i++)
+            {
+                this.drawFull(parent.children[i], blendMode, roundPx);
+            }
+        }
+
+        return this;
+
+    },
+
+    /**
+    * Sets the shadow properties of this BitmapDatas context which will affect all draw operations made to it.
+    * You can cancel an existing shadow by calling this method and passing no parameters.
+    * Note: At the time of writing (October 2014) Chrome still doesn't support shadowBlur used with drawImage.
+    *
+    * @method Phaser.BitmapData#shadow
+    * @param {string} color - The color of the shadow, given in a CSS format, i.e. `#000000` or `rgba(0,0,0,1)`. If `null` or `undefined` the shadow will be reset.
+    * @param {number} [blur=5] - The amount the shadow will be blurred by. Low values = a crisp shadow, high values = a softer shadow.
+    * @param {number} [x=10] - The horizontal offset of the shadow in pixels.
+    * @param {number} [y=10] - The vertical offset of the shadow in pixels.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    shadow: function (color, blur, x, y) {
+
+        var ctx = this.context;
+
+        if (color === undefined || color === null)
+        {
+            ctx.shadowColor = 'rgba(0,0,0,0)';
+        }
+        else
+        {
+            ctx.shadowColor = color;
+            ctx.shadowBlur = blur || 5;
+            ctx.shadowOffsetX = x || 10;
+            ctx.shadowOffsetY = y || 10;
+        }
+        
+        return this;
+
+    },
+
+    /**
+    * Draws the image onto this BitmapData using an image as an alpha mask.
+    *
+    * @method Phaser.BitmapData#alphaMask
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapData|Image|HTMLCanvasElement|string} source - The source to copy from. If you give a string it will try and find the Image in the Game.Cache first. This is quite expensive so try to provide the image itself.
+    * @param {Phaser.Sprite|Phaser.Image|Phaser.Text|Phaser.BitmapData|Image|HTMLCanvasElement|string} [mask] - The object to be used as the mask. If you give a string it will try and find the Image in the Game.Cache first. This is quite expensive so try to provide the image itself. If you don't provide a mask it will use this BitmapData as the mask.
+    * @param {Phaser.Rectangle} [sourceRect] - A Rectangle where x/y define the coordinates to draw the Source image to and width/height define the size.
+    * @param {Phaser.Rectangle} [maskRect] - A Rectangle where x/y define the coordinates to draw the Mask image to and width/height define the size.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    alphaMask: function (source, mask, sourceRect, maskRect) {
+
+        if (maskRect === undefined || maskRect === null)
+        {
+            this.draw(mask).blendSourceAtop();
+        }
+        else
+        {
+            this.draw(mask, maskRect.x, maskRect.y, maskRect.width, maskRect.height).blendSourceAtop();
+        }
+
+        if (sourceRect === undefined || sourceRect === null)
+        {
+            this.draw(source).blendReset();
+        }
+        else
+        {
+            this.draw(source, sourceRect.x, sourceRect.y, sourceRect.width, sourceRect.height).blendReset();
+        }
+
+        return this;
+
+    },
+
+    /**
+    * Scans this BitmapData for all pixels matching the given r,g,b values and then draws them into the given destination BitmapData.
+    * The original BitmapData remains unchanged.
+    * The destination BitmapData must be large enough to receive all of the pixels that are scanned unless the 'resize' parameter is true.
+    * Although the destination BitmapData is returned from this method, it's actually modified directly in place, meaning this call is perfectly valid:
+    * `picture.extract(mask, r, g, b)`
+    * You can specify optional r2, g2, b2 color values. If given the pixel written to the destination bitmap will be of the r2, g2, b2 color.
+    * If not given it will be written as the same color it was extracted. You can provide one or more alternative colors, allowing you to tint
+    * the color during extraction.
+    *
+    * @method Phaser.BitmapData#extract
+    * @param {Phaser.BitmapData} destination - The BitmapData that the extracted pixels will be drawn to.
+    * @param {number} r - The red color component, in the range 0 - 255.
+    * @param {number} g - The green color component, in the range 0 - 255.
+    * @param {number} b - The blue color component, in the range 0 - 255.
+    * @param {number} [a=255] - The alpha color component, in the range 0 - 255 that the new pixel will be drawn at.
+    * @param {boolean} [resize=false] - Should the destination BitmapData be resized to match this one before the pixels are copied?
+    * @param {number} [r2] - An alternative red color component to be written to the destination, in the range 0 - 255.
+    * @param {number} [g2] - An alternative green color component to be written to the destination, in the range 0 - 255.
+    * @param {number} [b2] - An alternative blue color component to be written to the destination, in the range 0 - 255.
+    * @returns {Phaser.BitmapData} The BitmapData that the extract pixels were drawn on.
+    */
+    extract: function (destination, r, g, b, a, resize, r2, g2, b2) {
+
+        if (a === undefined) { a = 255; }
+        if (resize === undefined) { resize = false; }
+        if (r2 === undefined) { r2 = r; }
+        if (g2 === undefined) { g2 = g; }
+        if (b2 === undefined) { b2 = b; }
+
+        if (resize)
+        {
+            destination.resize(this.width, this.height);
+        }
+
+        this.processPixelRGB(
+            function (pixel, x, y)
+            {
+                if (pixel.r === r && pixel.g === g && pixel.b === b)
+                {
+                    destination.setPixel32(x, y, r2, g2, b2, a, false);
+                }
+                return false;
+            },
+            this);
+
+        destination.context.putImageData(destination.imageData, 0, 0);
+        destination.dirty = true;
+
+        return destination;
+
+    },
+
+    /**
+    * Draws a filled Rectangle to the BitmapData at the given x, y coordinates and width / height in size.
+    *
+    * @method Phaser.BitmapData#rect
+    * @param {number} x - The x coordinate of the top-left of the Rectangle.
+    * @param {number} y - The y coordinate of the top-left of the Rectangle.
+    * @param {number} width - The width of the Rectangle.
+    * @param {number} height - The height of the Rectangle.
+    * @param {string} [fillStyle] - If set the context fillStyle will be set to this value before the rect is drawn.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    rect: function (x, y, width, height, fillStyle) {
+
+        if (typeof fillStyle !== 'undefined')
+        {
+            this.context.fillStyle = fillStyle;
+        }
+
+        this.context.fillRect(x, y, width, height);
+
+        return this;
+
+    },
+
+    /**
+    * Draws text to the BitmapData in the given font and color.
+    * The default font is 14px Courier, so useful for quickly drawing debug text.
+    * If you need to do a lot of font work to this BitmapData we'd recommend implementing your own text draw method.
+    *
+    * @method Phaser.BitmapData#text
+    * @param {string} text - The text to write to the BitmapData.
+    * @param {number} x - The x coordinate of the top-left of the text string.
+    * @param {number} y - The y coordinate of the top-left of the text string.
+    * @param {string} [font='14px Courier'] - The font. This is passed directly to Context.font, so anything that can support, this can.
+    * @param {string} [color='rgb(255,255,255)'] - The color the text will be drawn in.
+    * @param {boolean} [shadow=true] - Draw a single pixel black shadow below the text (offset by text.x/y + 1)
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    text: function (text, x, y, font, color, shadow) {
+
+        if (x === undefined) { x = 0; }
+        if (y === undefined) { y = 0; }
+        if (font === undefined) { font = '14px Courier'; }
+        if (color === undefined) { color = 'rgb(255,255,255)'; }
+        if (shadow === undefined) { shadow = true; }
+
+        var ctx = this.context;
+        var prevFont = ctx.font;
+
+        ctx.font = font;
+
+        if (shadow)
+        {
+            ctx.fillStyle = 'rgb(0,0,0)';
+            ctx.fillText(text, x + 1, y + 1);
+        }
+        
+        ctx.fillStyle = color;
+        ctx.fillText(text, x, y);
+
+        ctx.font = prevFont;
+        
+        return this;
+
+    },
+
+    /**
+    * Draws a filled Circle to the BitmapData at the given x, y coordinates and radius in size.
+    *
+    * @method Phaser.BitmapData#circle
+    * @param {number} x - The x coordinate to draw the Circle at. This is the center of the circle.
+    * @param {number} y - The y coordinate to draw the Circle at. This is the center of the circle.
+    * @param {number} radius - The radius of the Circle in pixels. The radius is half the diameter.
+    * @param {string} [fillStyle] - If set the context fillStyle will be set to this value before the circle is drawn.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    circle: function (x, y, radius, fillStyle) {
+
+        var ctx = this.context;
+
+        if (fillStyle !== undefined)
+        {
+            ctx.fillStyle = fillStyle;
+        }
+
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2, false);
+        ctx.closePath();
+
+        ctx.fill();
+
+        return this;
+
+    },
+
+    /**
+    * Draws a line between the coordinates given in the color and thickness specified.
+    *
+    * @method Phaser.BitmapData#line
+    * @param {number} x1 - The x coordinate to start the line from.
+    * @param {number} y1 - The y coordinate to start the line from.
+    * @param {number} x2 - The x coordinate to draw the line to.
+    * @param {number} y2 - The y coordinate to draw the line to.
+    * @param {string} [color='#fff'] - The stroke color that the line will be drawn in.
+    * @param {number} [width=1] - The line thickness.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    line: function (x1, y1, x2, y2, color, width) {
+
+        if (color === undefined) { color = '#fff'; }
+        if (width === undefined) { width = 1; }
+
+        var ctx = this.context;
+
+        ctx.beginPath();
+
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+
+        ctx.lineWidth = width;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+
+        ctx.closePath();
+
+        return this;
+
+    },
+
+    /**
+    * Takes the given Line object and image and renders it to this BitmapData as a repeating texture line.
+    *
+    * @method Phaser.BitmapData#textureLine
+    * @param {Phaser.Line} line - A Phaser.Line object that will be used to plot the start and end of the line.
+    * @param {string|Image} image - The key of an image in the Phaser.Cache to use as the texture for this line, or an actual Image.
+    * @param {string} [repeat='repeat-x'] - The pattern repeat mode to use when drawing the line. Either `repeat`, `repeat-x` or `no-repeat`.
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    textureLine: function (line, image, repeat) {
+
+        if (repeat === undefined) { repeat = 'repeat-x'; }
+
+        if (typeof image === 'string')
+        {
+            image = this.game.cache.getImage(image);
+
+            if (!image)
+            {
+                return;
+            }
+        }
+
+        var width = line.length;
+
+        if (repeat === 'no-repeat' && width > image.width)
+        {
+            width = image.width;
+        }
+
+        var ctx = this.context;
+
+        ctx.fillStyle = ctx.createPattern(image, repeat);
+
+        this._circle = new Phaser.Circle(line.start.x, line.start.y, image.height);
+
+        this._circle.circumferencePoint(line.angle - 1.5707963267948966, false, this._pos);
+
+        ctx.save();
+        ctx.translate(this._pos.x, this._pos.y);
+        ctx.rotate(line.angle);
+        ctx.fillRect(0, 0, width, image.height);
+        ctx.restore();
+
+        this.dirty = true;
+
+        return this;
+
+    },
 
     /**
     * If the game is running in WebGL this will push the texture up to the GPU if it's dirty.
     * This is called automatically if the BitmapData is being used by a Sprite, otherwise you need to remember to call it in your render function.
+    * If you wish to suppress this functionality set BitmapData.disableTextureUpload to `true`.
+    *
     * @method Phaser.BitmapData#render
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
     */
     render: function () {
 
-        if (this._dirty)
+        if (!this.disableTextureUpload && this.dirty)
         {
-            //  Only needed if running in WebGL, otherwise this array will never get cleared down
-            if (this.game.renderType == Phaser.WEBGL)
-            {
-                PIXI.texturesToUpdate.push(this.baseTexture);
-            }
-
-            this._dirty = false;
+            this.baseTexture.dirty();
+            this.dirty = false;
         }
+
+        return this;
+
+    },
+
+    /**
+    * Destroys this BitmapData and puts the canvas it was using back into the canvas pool for re-use.
+    *
+    * @method Phaser.BitmapData#destroy
+    */
+    destroy: function () {
+
+        this.frameData.destroy();
+
+        this.texture.destroy(true);
+
+        PIXI.CanvasPool.remove(this);
+
+    },
+
+    /**
+    * Resets the blend mode (effectively sets it to 'source-over')
+    *
+    * @method Phaser.BitmapData#blendReset
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendReset: function () {
+
+        this.op = 'source-over';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'source-over'
+    *
+    * @method Phaser.BitmapData#blendSourceOver
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendSourceOver: function () {
+
+        this.op = 'source-over';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'source-in'
+    *
+    * @method Phaser.BitmapData#blendSourceIn
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendSourceIn: function () {
+
+        this.op = 'source-in';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'source-out'
+    *
+    * @method Phaser.BitmapData#blendSourceOut
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendSourceOut: function () {
+
+        this.op = 'source-out';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'source-atop'
+    *
+    * @method Phaser.BitmapData#blendSourceAtop
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendSourceAtop: function () {
+
+        this.op = 'source-atop';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'destination-over'
+    *
+    * @method Phaser.BitmapData#blendDestinationOver
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendDestinationOver: function () {
+
+        this.op = 'destination-over';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'destination-in'
+    *
+    * @method Phaser.BitmapData#blendDestinationIn
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendDestinationIn: function () {
+
+        this.op = 'destination-in';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'destination-out'
+    *
+    * @method Phaser.BitmapData#blendDestinationOut
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendDestinationOut: function () {
+
+        this.op = 'destination-out';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'destination-atop'
+    *
+    * @method Phaser.BitmapData#blendDestinationAtop
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendDestinationAtop: function () {
+
+        this.op = 'destination-atop';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'xor'
+    *
+    * @method Phaser.BitmapData#blendXor
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendXor: function () {
+
+        this.op = 'xor';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'lighter'
+    *
+    * @method Phaser.BitmapData#blendAdd
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendAdd: function () {
+
+        this.op = 'lighter';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'multiply'
+    *
+    * @method Phaser.BitmapData#blendMultiply
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendMultiply: function () {
+
+        this.op = 'multiply';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'screen'
+    *
+    * @method Phaser.BitmapData#blendScreen
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendScreen: function () {
+
+        this.op = 'screen';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'overlay'
+    *
+    * @method Phaser.BitmapData#blendOverlay
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendOverlay: function () {
+
+        this.op = 'overlay';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'darken'
+    *
+    * @method Phaser.BitmapData#blendDarken
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendDarken: function () {
+
+        this.op = 'darken';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'lighten'
+    *
+    * @method Phaser.BitmapData#blendLighten
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendLighten: function () {
+
+        this.op = 'lighten';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'color-dodge'
+    *
+    * @method Phaser.BitmapData#blendColorDodge
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendColorDodge: function () {
+
+        this.op = 'color-dodge';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'color-burn'
+    *
+    * @method Phaser.BitmapData#blendColorBurn
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendColorBurn: function () {
+
+        this.op = 'color-burn';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'hard-light'
+    *
+    * @method Phaser.BitmapData#blendHardLight
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendHardLight: function () {
+
+        this.op = 'hard-light';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'soft-light'
+    *
+    * @method Phaser.BitmapData#blendSoftLight
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendSoftLight: function () {
+
+        this.op = 'soft-light';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'difference'
+    *
+    * @method Phaser.BitmapData#blendDifference
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendDifference: function () {
+
+        this.op = 'difference';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'exclusion'
+    *
+    * @method Phaser.BitmapData#blendExclusion
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendExclusion: function () {
+
+        this.op = 'exclusion';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'hue'
+    *
+    * @method Phaser.BitmapData#blendHue
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendHue: function () {
+
+        this.op = 'hue';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'saturation'
+    *
+    * @method Phaser.BitmapData#blendSaturation
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendSaturation: function () {
+
+        this.op = 'saturation';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'color'
+    *
+    * @method Phaser.BitmapData#blendColor
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendColor: function () {
+
+        this.op = 'color';
+        return this;
+
+    },
+
+    /**
+    * Sets the blend mode to 'luminosity'
+    *
+    * @method Phaser.BitmapData#blendLuminosity
+    * @return {Phaser.BitmapData} This BitmapData object for method chaining.
+    */
+    blendLuminosity: function () {
+
+        this.op = 'luminosity';
+        return this;
 
     }
 
-}
-
-//  EaselJS Tiny API emulation
+};
 
 /**
-* Shortcut to moveTo.
-* @method Phaser.BitmapData.prototype.mt
+* @memberof Phaser.BitmapData
+* @property {boolean} smoothed - Gets or sets this BitmapData.contexts smoothing enabled value.
 */
-Phaser.BitmapData.prototype.mt = Phaser.BitmapData.prototype.moveTo;
+Object.defineProperty(Phaser.BitmapData.prototype, "smoothed", {
+
+    get: function () {
+
+        Phaser.Canvas.getSmoothingEnabled(this.context);
+
+    },
+
+    set: function (value) {
+
+        Phaser.Canvas.setSmoothingEnabled(this.context, value);
+
+    }
+
+});
 
 /**
-* Shortcut to lineTo.
-* @method Phaser.BitmapData.prototype.mt
+* @memberof Phaser.BitmapData
+* @property {string} op - A short-hand code to get or set the global composite operation of the BitmapDatas canvas.
 */
-Phaser.BitmapData.prototype.lt = Phaser.BitmapData.prototype.lineTo;
+Object.defineProperty(Phaser.BitmapData.prototype, "op", {
+
+    get: function () {
+
+        return this.context.globalCompositeOperation;
+
+    },
+
+    set: function (value) {
+
+        this.context.globalCompositeOperation = value;
+
+    }
+
+});
 
 /**
-* Shortcut to arcTo.
-* @method Phaser.BitmapData.prototype.at
-*/
-Phaser.BitmapData.prototype.at = Phaser.BitmapData.prototype.arcTo;
+ * Gets a JavaScript object that has 6 properties set that are used by BitmapData in a transform.
+ *
+ * @method Phaser.BitmapData.getTransform
+ * @param {number} translateX - The x translate value.
+ * @param {number} translateY - The y translate value.
+ * @param {number} scaleX - The scale x value.
+ * @param {number} scaleY - The scale y value.
+ * @param {number} skewX - The skew x value.
+ * @param {number} skewY - The skew y value.
+ * @return {object} A JavaScript object containing all of the properties BitmapData needs for transforms.
+ */
+Phaser.BitmapData.getTransform = function (translateX, translateY, scaleX, scaleY, skewX, skewY) {
 
-/**
-* Shortcut to bezierCurveTo.
-* @method Phaser.BitmapData.prototype.bt
-*/
-Phaser.BitmapData.prototype.bt = Phaser.BitmapData.prototype.bezierCurveTo;
-    
-/**
-* Shortcut to quadraticCurveTo.
-* @method Phaser.BitmapData.prototype.qt
-*/
-Phaser.BitmapData.prototype.qt = Phaser.BitmapData.prototype.quadraticCurveTo;
-    
-/**
-* Shortcut to arc.
-* @method Phaser.BitmapData.prototype.a
-*/
-Phaser.BitmapData.prototype.a = Phaser.BitmapData.prototype.arc;
+    if (typeof translateX !== 'number') { translateX = 0; }
+    if (typeof translateY !== 'number') { translateY = 0; }
+    if (typeof scaleX !== 'number') { scaleX = 1; }
+    if (typeof scaleY !== 'number') { scaleY = 1; }
+    if (typeof skewX !== 'number') { skewX = 0; }
+    if (typeof skewY !== 'number') { skewY = 0; }
 
-/**
-* Shortcut to rect.
-* @method Phaser.BitmapData.prototype.r
-*/
-Phaser.BitmapData.prototype.r = Phaser.BitmapData.prototype.rect;
-    
-/**
-* Shortcut to closePath.
-* @method Phaser.BitmapData.prototype.cp
-*/
-Phaser.BitmapData.prototype.cp = Phaser.BitmapData.prototype.closePath;
+    return { sx: scaleX, sy: scaleY, scaleX: scaleX, scaleY: scaleY, skewX: skewX, skewY: skewY, translateX: translateX, translateY: translateY, tx: translateX, ty: translateY };
 
-/**
-* Shortcut to clear.
-* @method Phaser.BitmapData.prototype.c
-*/
-Phaser.BitmapData.prototype.c = Phaser.BitmapData.prototype.clear;
-    
-/**
-* Shortcut to beginFill.
-* @method Phaser.BitmapData.prototype.f
-*/
-Phaser.BitmapData.prototype.f = Phaser.BitmapData.prototype.beginFill;
+};
 
-/**
-* Shortcut to beginLinearGradientFill.
-* @method Phaser.BitmapData.prototype.lf
-*/
-Phaser.BitmapData.prototype.lf = Phaser.BitmapData.prototype.beginLinearGradientFill;
-    
-/**
-* Shortcut to beginRadialGradientFill.
-* @method Phaser.BitmapData.prototype.rf
-*/
-Phaser.BitmapData.prototype.rf = Phaser.BitmapData.prototype.beginRadialGradientFill;
-    
-/**
-* Shortcut to beginBitmapFill.
-* @method Phaser.BitmapData.prototype.bf
-*/
-//Phaser.BitmapData.prototype.bf = Phaser.BitmapData.prototype.beginBitmapFill;
-    
-/**
-* Shortcut to endFill.
-* @method Phaser.BitmapData.prototype.ef
-*/
-Phaser.BitmapData.prototype.ef = Phaser.BitmapData.prototype.endFill;
-
-/**
-* Shortcut to setStrokeStyle.
-* @method Phaser.BitmapData.prototype.ss
-*/
-Phaser.BitmapData.prototype.ss = Phaser.BitmapData.prototype.setStrokeStyle;
-    
-/**
-* Shortcut to beginStroke.
-* @method Phaser.BitmapData.prototype.s
-*/
-Phaser.BitmapData.prototype.s = Phaser.BitmapData.prototype.beginStroke;
-    
-/**
-* Shortcut to beginLinearGradientStroke.
-* @method Phaser.BitmapData.prototype.ls
-*/
-Phaser.BitmapData.prototype.ls = Phaser.BitmapData.prototype.beginLinearGradientStroke;
-
-/**
-* Shortcut to beginRadialGradientStroke.
-* @method Phaser.BitmapData.prototype.rs
-*/
-Phaser.BitmapData.prototype.rs = Phaser.BitmapData.prototype.beginRadialGradientStroke;
-    
-/**
-* Shortcut to beginBitmapStroke.
-* @method Phaser.BitmapData.prototype.bs
-*/
-// Phaser.BitmapData.prototype.bs = Phaser.BitmapData.prototype.beginBitmapStroke;
-    
-/**
-* Shortcut to endStroke.
-* @method Phaser.BitmapData.prototype.es
-*/
-// Phaser.BitmapData.prototype.es = Phaser.BitmapData.prototype.endStroke;
-    
-/**
-* Shortcut to rect.
-* @method Phaser.BitmapData.prototype.dr
-*/
-Phaser.BitmapData.prototype.dr = Phaser.BitmapData.prototype.rect;
-    
-/**
-* Shortcut to drawRoundRect.
-* @method Phaser.BitmapData.prototype.rr
-*/
-// Phaser.BitmapData.prototype.rr = Phaser.BitmapData.prototype.drawRoundRect;
-    
-/**
-* Shortcut to drawRoundRectComplex.
-* @method Phaser.BitmapData.prototype.rc
-*/
-// Phaser.BitmapData.prototype.rc = Phaser.BitmapData.prototype.drawRoundRectComplex;
-
-/**
-* Shortcut to drawCircle.
-* @method Phaser.BitmapData.prototype.dc
-*/
-Phaser.BitmapData.prototype.dc = Phaser.BitmapData.prototype.circle;
-    
-/**
-* Shortcut to drawEllipse.
-* @method Phaser.BitmapData.prototype.de
-*/
-Phaser.BitmapData.prototype.de = Phaser.BitmapData.prototype.ellipse;
-    
-/**
-* Shortcut to drawPolyStar.
-* @method Phaser.BitmapData.prototype.dp
-*/
-// Phaser.BitmapData.prototype.dp = Phaser.BitmapData.prototype.drawPolyStar;
+Phaser.BitmapData.prototype.constructor = Phaser.BitmapData;

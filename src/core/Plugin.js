@@ -1,50 +1,49 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
-/** 
+/**
 * This is a base Plugin template to use for any Phaser plugin development.
-* 
+*
 * @class Phaser.Plugin
-* @classdesc Phaser - Plugin
 * @constructor
 * @param {Phaser.Game} game - A reference to the currently running game.
-* @param {Any} parent - The object that owns this plugin, usually Phaser.PluginManager.
+* @param {any} parent - The object that owns this plugin, usually Phaser.PluginManager.
 */
 Phaser.Plugin = function (game, parent) {
 
-    if (typeof parent === 'undefined') { parent = null; }
+    if (parent === undefined) { parent = null; }
 
     /**
     * @property {Phaser.Game} game - A reference to the currently running game.
     */
     this.game = game;
-    
+
     /**
-    * @property {Any} parent - The parent of this plugin. If added to the PluginManager the parent will be set to that, otherwise it will be null.
+    * @property {any} parent - The parent of this plugin. If added to the PluginManager the parent will be set to that, otherwise it will be null.
     */
     this.parent = parent;
-    
+
     /**
     * @property {boolean} active - A Plugin with active=true has its preUpdate and update methods called by the parent, otherwise they are skipped.
     * @default
     */
     this.active = false;
-    
+
     /**
     * @property {boolean} visible - A Plugin with visible=true has its render and postRender methods called by the parent, otherwise they are skipped.
     * @default
     */
     this.visible = false;
-    
+
     /**
     * @property {boolean} hasPreUpdate - A flag to indicate if this plugin has a preUpdate method.
     * @default
     */
     this.hasPreUpdate = false;
-    
+
     /**
     * @property {boolean} hasUpdate - A flag to indicate if this plugin has an update method.
     * @default
@@ -56,13 +55,13 @@ Phaser.Plugin = function (game, parent) {
     * @default
     */
     this.hasPostUpdate = false;
-    
+
     /**
     * @property {boolean} hasRender - A flag to indicate if this plugin has a render method.
     * @default
     */
     this.hasRender = false;
-    
+
     /**
     * @property {boolean} hasPostRender - A flag to indicate if this plugin has a postRender method.
     * @default
@@ -115,7 +114,9 @@ Phaser.Plugin.prototype = {
         this.parent = null;
         this.active = false;
         this.visible = false;
-        
+
     }
 
 };
+
+Phaser.Plugin.prototype.constructor = Phaser.Plugin;

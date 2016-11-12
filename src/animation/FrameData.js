@@ -1,6 +1,6 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
@@ -17,7 +17,6 @@ Phaser.FrameData = function () {
     * @private
     */
     this._frames = [];
-
 
     /**
     * @property {Array} _frameNames - Local array of frame names for name to index conversions.
@@ -60,12 +59,12 @@ Phaser.FrameData.prototype = {
     */
     getFrame: function (index) {
 
-        if (this._frames.length > index)
+        if (index >= this._frames.length)
         {
-            return this._frames[index];
+            index = 0;
         }
 
-        return null;
+        return this._frames[index];
 
     },
 
@@ -102,7 +101,35 @@ Phaser.FrameData.prototype = {
         }
 
         return true;
-        
+
+    },
+
+    /**
+     * Makes a copy of this FrameData including copies (not references) to all of the Frames it contains.
+     *
+     * @method Phaser.FrameData#clone
+     * @return {Phaser.FrameData} A clone of this object, including clones of the Frame objects it contains.
+     */
+    clone: function () {
+
+        var output = new Phaser.FrameData();
+
+        //  No input array, so we loop through all frames
+        for (var i = 0; i < this._frames.length; i++)
+        {
+            output._frames.push(this._frames[i].clone());
+        }
+
+        for (var p in this._frameNames)
+        {
+            if (this._frameNames.hasOwnProperty(p))
+            {
+                output._frameNames.push(this._frameNames[p]);
+            }
+        }
+
+        return output;
+
     },
 
     /**
@@ -115,8 +142,8 @@ Phaser.FrameData.prototype = {
     * @return {Array} An array of Frames between the start and end index values, or an empty array if none were found.
     */
     getFrameRange: function (start, end, output) {
-        
-        if (typeof output === "undefined") { output = []; }
+
+        if (output === undefined) { output = []; }
 
         for (var i = start; i <= end; i++)
         {
@@ -132,17 +159,17 @@ Phaser.FrameData.prototype = {
     * The frames are returned in the output array, or if none is provided in a new Array object.
     *
     * @method Phaser.FrameData#getFrames
-    * @param {Array} frames - An Array containing the indexes of the frames to retrieve. If the array is empty then all frames in the FrameData are returned.
+    * @param {Array} [frames] - An Array containing the indexes of the frames to retrieve. If the array is empty or undefined then all frames in the FrameData are returned.
     * @param {boolean} [useNumericIndex=true] - Are the given frames using numeric indexes (default) or strings? (false)
     * @param {Array} [output] - If given the results will be appended to the end of this array otherwise a new array will be created.
     * @return {Array} An array of all Frames in this FrameData set matching the given names or IDs.
     */
     getFrames: function (frames, useNumericIndex, output) {
 
-        if (typeof useNumericIndex === "undefined") { useNumericIndex = true; }
-        if (typeof output === "undefined") { output = []; }
+        if (useNumericIndex === undefined) { useNumericIndex = true; }
+        if (output === undefined) { output = []; }
 
-        if (typeof frames === "undefined" || frames.length === 0)
+        if (frames === undefined || frames.length === 0)
         {
             //  No input array, so we loop through all frames
             for (var i = 0; i < this._frames.length; i++)
@@ -154,7 +181,7 @@ Phaser.FrameData.prototype = {
         else
         {
             //  Input array given, loop through that instead
-            for (var i = 0, len = frames.length; i < len; i++)
+            for (var i = 0; i < frames.length; i++)
             {
                 //  Does the input array contain names or indexes?
                 if (useNumericIndex)
@@ -179,20 +206,20 @@ Phaser.FrameData.prototype = {
     * The frames indexes are returned in the output array, or if none is provided in a new Array object.
     *
     * @method Phaser.FrameData#getFrameIndexes
-    * @param {Array} frames - An Array containing the indexes of the frames to retrieve. If the array is empty then all frames in the FrameData are returned.
+    * @param {Array} [frames] - An Array containing the indexes of the frames to retrieve. If undefined or the array is empty then all frames in the FrameData are returned.
     * @param {boolean} [useNumericIndex=true] - Are the given frames using numeric indexes (default) or strings? (false)
     * @param {Array} [output] - If given the results will be appended to the end of this array otherwise a new array will be created.
     * @return {Array} An array of all Frame indexes matching the given names or IDs.
     */
     getFrameIndexes: function (frames, useNumericIndex, output) {
 
-        if (typeof useNumericIndex === "undefined") { useNumericIndex = true; }
-        if (typeof output === "undefined") { output = []; }
+        if (useNumericIndex === undefined) { useNumericIndex = true; }
+        if (output === undefined) { output = []; }
 
-        if (typeof frames === "undefined" || frames.length === 0)
+        if (frames === undefined || frames.length === 0)
         {
             //  No frames array, so we loop through all frames
-            for (var i = 0, len = this._frames.length; i < len; i++)
+            for (var i = 0; i < this._frames.length; i++)
             {
                 output.push(this._frames[i].index);
             }
@@ -200,12 +227,12 @@ Phaser.FrameData.prototype = {
         else
         {
             //  Input array given, loop through that instead
-            for (var i = 0, len = frames.length; i < len; i++)
+            for (var i = 0; i < frames.length; i++)
             {
                 //  Does the frames array contain names or indexes?
-                if (useNumericIndex)
+                if (useNumericIndex && this._frames[frames[i]])
                 {
-                    output.push(frames[i]);
+                    output.push(this._frames[frames[i]].index);
                 }
                 else
                 {
@@ -219,9 +246,23 @@ Phaser.FrameData.prototype = {
 
         return output;
 
+    },
+
+    /**
+    * Destroys this FrameData collection by nulling the _frames and _frameNames arrays.
+    *
+    * @method Phaser.FrameData#destroy
+    */
+    destroy: function () {
+
+        this._frames = null;
+        this._frameNames = null;
+
     }
 
 };
+
+Phaser.FrameData.prototype.constructor = Phaser.FrameData;
 
 /**
 * @name Phaser.FrameData#total

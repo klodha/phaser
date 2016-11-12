@@ -1,6 +1,6 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
@@ -25,11 +25,20 @@ Phaser.AnimationManager = function (sprite) {
     this.game = sprite.game;
 
     /**
-    * @property {Phaser.Frame} currentFrame - The currently displayed Frame of animation, if any.
+    * The currently displayed Frame of animation, if any.
+    * This property is only set once an Animation starts playing. Until that point it remains set as `null`.
+    * 
+    * @property {Phaser.Frame} currentFrame
     * @default
     */
     this.currentFrame = null;
-    
+
+    /**
+    * @property {Phaser.Animation} currentAnim - The currently displayed animation, if any.
+    * @default
+    */
+    this.currentAnim = null;
+
     /**
     * @property {boolean} updateIfVisible - Should the animation data continue to update even if the Sprite.visible is set to false.
     * @default
@@ -72,13 +81,90 @@ Phaser.AnimationManager.prototype = {
     * @method Phaser.AnimationManager#loadFrameData
     * @private
     * @param {Phaser.FrameData} frameData - The FrameData set to load.
+    * @param {string|number} frame - The frame to default to.
+    * @return {boolean} Returns `true` if the frame data was loaded successfully, otherwise `false`
     */
-    loadFrameData: function (frameData) {
+    loadFrameData: function (frameData, frame) {
+
+        if (frameData === undefined)
+        {
+            return false;
+        }
+
+        if (this.isLoaded)
+        {
+            //   We need to update the frameData that the animations are using
+            for (var anim in this._anims)
+            {
+                this._anims[anim].updateFrameData(frameData);
+            }
+        }
 
         this._frameData = frameData;
-        this.frame = 0;
+
+        if (frame === undefined || frame === null)
+        {
+            this.frame = 0;
+        }
+        else
+        {
+            if (typeof frame === 'string')
+            {
+                this.frameName = frame;
+            }
+            else
+            {
+                this.frame = frame;
+            }
+        }
+
         this.isLoaded = true;
 
+        return true;
+    },
+
+    /**
+    * Loads FrameData into the internal temporary vars and resets the frame index to zero.
+    * This is called automatically when a new Sprite is created.
+    *
+    * @method Phaser.AnimationManager#copyFrameData
+    * @private
+    * @param {Phaser.FrameData} frameData - The FrameData set to load.
+    * @param {string|number} frame - The frame to default to.
+    * @return {boolean} Returns `true` if the frame data was loaded successfully, otherwise `false`
+    */
+    copyFrameData: function (frameData, frame) {
+
+        this._frameData = frameData.clone();
+
+        if (this.isLoaded)
+        {
+            //   We need to update the frameData that the animations are using
+            for (var anim in this._anims)
+            {
+                this._anims[anim].updateFrameData(this._frameData);
+            }
+        }
+
+        if (frame === undefined || frame === null)
+        {
+            this.frame = 0;
+        }
+        else
+        {
+            if (typeof frame === 'string')
+            {
+                this.frameName = frame;
+            }
+            else
+            {
+                this.frame = frame;
+            }
+        }
+
+        this.isLoaded = true;
+
+        return true;
     },
 
     /**
@@ -95,18 +181,13 @@ Phaser.AnimationManager.prototype = {
     */
     add: function (name, frames, frameRate, loop, useNumericIndex) {
 
-        if (this._frameData == null)
-        {
-            console.warn('No FrameData available for Phaser.Animation ' + name);
-            return;
-        }
-
+        frames = frames || [];
         frameRate = frameRate || 60;
 
-        if (typeof loop === 'undefined') { loop = false; }
+        if (loop === undefined) { loop = false; }
 
         //  If they didn't set the useNumericIndex then let's at least try and guess it
-        if (typeof useNumericIndex === 'undefined')
+        if (useNumericIndex === undefined)
         {
             if (frames && typeof frames[0] === 'number')
             {
@@ -118,22 +199,18 @@ Phaser.AnimationManager.prototype = {
             }
         }
 
-        //  Create the signals the AnimationManager will emit
-        if (this.sprite.events.onAnimationStart == null)
-        {
-            this.sprite.events.onAnimationStart = new Phaser.Signal();
-            this.sprite.events.onAnimationComplete = new Phaser.Signal();
-            this.sprite.events.onAnimationLoop = new Phaser.Signal();
-        }
-
-        this._outputFrames.length = 0;
+        this._outputFrames = [];
 
         this._frameData.getFrameIndexes(frames, useNumericIndex, this._outputFrames);
 
         this._anims[name] = new Phaser.Animation(this.game, this.sprite, name, this._frameData, this._outputFrames, frameRate, loop);
+
         this.currentAnim = this._anims[name];
-        this.currentFrame = this.currentAnim.currentFrame;
-        this.sprite.setTexture(PIXI.TextureCache[this.currentFrame.uuid]);
+
+        if (this.sprite.tilingTexture)
+        {
+            this.sprite.refreshTexture = true;
+        }
 
         return this._anims[name];
 
@@ -149,7 +226,7 @@ Phaser.AnimationManager.prototype = {
     */
     validateFrames: function (frames, useNumericIndex) {
 
-        if (typeof useNumericIndex == 'undefined') { useNumericIndex = true; }
+        if (useNumericIndex === undefined) { useNumericIndex = true; }
 
         for (var i = 0; i < frames.length; i++)
         {
@@ -174,9 +251,11 @@ Phaser.AnimationManager.prototype = {
     },
 
     /**
-    * Play an animation based on the given key. The animation should previously have been added via sprite.animations.add()
-    * If the requested animation is already playing this request will be ignored. If you need to reset an already running animation do so directly on the Animation object itself.
+    * Play an animation based on the given key. The animation should previously have been added via `animations.add`
     * 
+    * If the requested animation is already playing this request will be ignored. 
+    * If you need to reset an already running animation do so directly on the Animation object itself.
+    *
     * @method Phaser.AnimationManager#play
     * @param {string} name - The name of the animation to be played, e.g. "fire", "walk", "jump".
     * @param {number} [frameRate=null] - The framerate to play the animation at. The speed is given in frames per second. If not provided the previously set frameRate of the Animation is used.
@@ -188,18 +267,26 @@ Phaser.AnimationManager.prototype = {
 
         if (this._anims[name])
         {
-            if (this.currentAnim == this._anims[name])
+            if (this.currentAnim === this._anims[name])
             {
                 if (this.currentAnim.isPlaying === false)
                 {
                     this.currentAnim.paused = false;
                     return this.currentAnim.play(frameRate, loop, killOnComplete);
                 }
+
+                return this.currentAnim;
             }
             else
             {
+                if (this.currentAnim && this.currentAnim.isPlaying)
+                {
+                    this.currentAnim.stop();
+                }
+
                 this.currentAnim = this._anims[name];
                 this.currentAnim.paused = false;
+                this.currentFrame = this.currentAnim.currentFrame;
                 return this.currentAnim.play(frameRate, loop, killOnComplete);
             }
         }
@@ -216,44 +303,32 @@ Phaser.AnimationManager.prototype = {
     */
     stop: function (name, resetFrame) {
 
-        if (typeof resetFrame == 'undefined') { resetFrame = false; }
+        if (resetFrame === undefined) { resetFrame = false; }
 
-        if (typeof name == 'string')
+        if (this.currentAnim && (typeof name !== 'string' || name === this.currentAnim.name))
         {
-            if (this._anims[name])
-            {
-                this.currentAnim = this._anims[name];
-                this.currentAnim.stop(resetFrame);
-            }
-        }
-        else
-        {
-            if (this.currentAnim)
-            {
-                this.currentAnim.stop(resetFrame);
-            }
+            this.currentAnim.stop(resetFrame);
         }
 
     },
 
     /**
     * The main update function is called by the Sprites update loop. It's responsible for updating animation frames and firing related events.
-    * 
+    *
     * @method Phaser.AnimationManager#update
     * @protected
     * @return {boolean} True if a new animation frame has been set, otherwise false.
     */
     update: function () {
 
-        if (this.updateIfVisible && this.sprite.visible === false)
+        if (this.updateIfVisible && !this.sprite.visible)
         {
             return false;
         }
 
-        if (this.currentAnim && this.currentAnim.update() === true)
+        if (this.currentAnim && this.currentAnim.update())
         {
             this.currentFrame = this.currentAnim.currentFrame;
-            this.sprite.currentFrame = this.currentFrame;
             return true;
         }
 
@@ -262,15 +337,47 @@ Phaser.AnimationManager.prototype = {
     },
 
     /**
+    * Advances by the given number of frames in the current animation, taking the loop value into consideration.
+    *
+    * @method Phaser.AnimationManager#next
+    * @param {number} [quantity=1] - The number of frames to advance.
+    */
+    next: function (quantity) {
+
+        if (this.currentAnim)
+        {
+            this.currentAnim.next(quantity);
+            this.currentFrame = this.currentAnim.currentFrame;
+        }
+
+    },
+
+    /**
+    * Moves backwards the given number of frames in the current animation, taking the loop value into consideration.
+    *
+    * @method Phaser.AnimationManager#previous
+    * @param {number} [quantity=1] - The number of frames to move back.
+    */
+    previous: function (quantity) {
+
+        if (this.currentAnim)
+        {
+            this.currentAnim.previous(quantity);
+            this.currentFrame = this.currentAnim.currentFrame;
+        }
+
+    },
+
+    /**
     * Returns an animation that was previously added by name.
     *
     * @method Phaser.AnimationManager#getAnimation
     * @param {string} name - The name of the animation to be returned, e.g. "fire".
-    * @return {Phaser.Animation|boolean} The Animation instance, if found, otherwise false.
+    * @return {Phaser.Animation} The Animation instance, if found, otherwise null.
     */
     getAnimation: function (name) {
 
-        if (typeof name == 'string')
+        if (typeof name === 'string')
         {
             if (this._anims[name])
             {
@@ -278,7 +385,7 @@ Phaser.AnimationManager.prototype = {
             }
         }
 
-        return false;
+        return null;
 
     },
 
@@ -289,27 +396,42 @@ Phaser.AnimationManager.prototype = {
     */
     refreshFrame: function () {
 
-        this.sprite.currentFrame = this.currentFrame;
-        this.sprite.setTexture(PIXI.TextureCache[this.currentFrame.uuid]);
+        //  TODO
+        // this.sprite.setTexture(PIXI.TextureCache[this.currentFrame.uuid]);
 
     },
 
     /**
-    * Destroys all references this AnimationManager contains. Sets the _anims to a new object and nulls the current animation.
+    * Destroys all references this AnimationManager contains.
+    * Iterates through the list of animations stored in this manager and calls destroy on each of them.
     *
     * @method Phaser.AnimationManager#destroy
     */
     destroy: function () {
 
+        var anim = null;
+
+        for (var anim in this._anims)
+        {
+            if (this._anims.hasOwnProperty(anim))
+            {
+                this._anims[anim].destroy();
+            }
+        }
+
         this._anims = {};
+        this._outputFrames = [];
         this._frameData = null;
-        this._frameIndex = 0;
         this.currentAnim = null;
         this.currentFrame = null;
+        this.sprite = null;
+        this.game = null;
 
     }
 
 };
+
+Phaser.AnimationManager.prototype.constructor = Phaser.AnimationManager;
 
 /**
 * @name Phaser.AnimationManager#frameData
@@ -330,17 +452,10 @@ Object.defineProperty(Phaser.AnimationManager.prototype, 'frameData', {
 * @readonly
 */
 Object.defineProperty(Phaser.AnimationManager.prototype, 'frameTotal', {
- 
+
     get: function () {
 
-        if (this._frameData)
-        {
-            return this._frameData.total;
-        }
-        else
-        {
-            return -1;
-        }
+        return this._frameData.total;
     }
 
 });
@@ -366,6 +481,23 @@ Object.defineProperty(Phaser.AnimationManager.prototype, 'paused', {
 });
 
 /**
+* @name Phaser.AnimationManager#name
+* @property {string} name - Gets the current animation name, if set.
+*/
+Object.defineProperty(Phaser.AnimationManager.prototype, 'name', {
+
+    get: function () {
+
+        if (this.currentAnim)
+        {
+            return this.currentAnim.name;
+        }
+
+    }
+
+});
+
+/**
 * @name Phaser.AnimationManager#frame
 * @property {number} frame - Gets or sets the current frame index and updates the Texture Cache for display.
 */
@@ -375,9 +507,9 @@ Object.defineProperty(Phaser.AnimationManager.prototype, 'frame', {
 
         if (this.currentFrame)
         {
-            return this._frameIndex;
+            return this.currentFrame.index;
         }
-        
+
     },
 
     set: function (value) {
@@ -385,9 +517,11 @@ Object.defineProperty(Phaser.AnimationManager.prototype, 'frame', {
         if (typeof value === 'number' && this._frameData && this._frameData.getFrame(value) !== null)
         {
             this.currentFrame = this._frameData.getFrame(value);
-            this._frameIndex = value;
-            this.sprite.currentFrame = this.currentFrame;
-            this.sprite.setTexture(PIXI.TextureCache[this.currentFrame.uuid]);
+
+            if (this.currentFrame)
+            {
+                this.sprite.setFrame(this.currentFrame);
+            }
         }
 
     }
@@ -414,9 +548,13 @@ Object.defineProperty(Phaser.AnimationManager.prototype, 'frameName', {
         if (typeof value === 'string' && this._frameData && this._frameData.getFrameByName(value) !== null)
         {
             this.currentFrame = this._frameData.getFrameByName(value);
-            this._frameIndex = this.currentFrame.index;
-            this.sprite.currentFrame = this.currentFrame;
-            this.sprite.setTexture(PIXI.TextureCache[this.currentFrame.uuid]);
+
+            if (this.currentFrame)
+            {
+                this._frameIndex = this.currentFrame.index;
+
+                this.sprite.setFrame(this.currentFrame);
+            }
         }
         else
         {

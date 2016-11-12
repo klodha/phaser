@@ -1,6 +1,6 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
@@ -12,7 +12,7 @@
 * @param {Phaser.Game} game - A reference to the currently running game.
 */
 Phaser.Net = function (game) {
-    
+
     this.game = game;
 
 };
@@ -21,7 +21,7 @@ Phaser.Net.prototype = {
 
     /**
     * Returns the hostname given by the browser.
-    * 
+    *
     * @method Phaser.Net#getHostName
     * @return {string}
     */
@@ -40,7 +40,7 @@ Phaser.Net.prototype = {
     * If the domain name is found it returns true.
     * You can specify a part of a domain, for example 'google' would match 'google.com', 'google.co.uk', etc.
     * Do not include 'http://' at the start.
-    * 
+    *
     * @method Phaser.Net#checkDomainName
     * @param {string} domain
     * @return {boolean} true if the given domain fragment can be found in the window.location.hostname
@@ -54,7 +54,7 @@ Phaser.Net.prototype = {
     * If the value doesn't already exist it is set.
     * If the value exists it is replaced with the new value given. If you don't provide a new value it is removed from the query string.
     * Optionally you can redirect to the new url, or just return it as a string.
-    * 
+    *
     * @method Phaser.Net#updateQueryString
     * @param {string} key - The querystring key to update.
     * @param {string} value - The new value to be set. If it already exists it will be replaced.
@@ -64,12 +64,12 @@ Phaser.Net.prototype = {
     */
     updateQueryString: function (key, value, redirect, url) {
 
-        if (typeof redirect === "undefined") { redirect = false; }
-        if (typeof url === "undefined" || url === '') { url = window.location.href; }
+        if (redirect === undefined) { redirect = false; }
+        if (url === undefined || url === '') { url = window.location.href; }
 
         var output = '';
         var re = new RegExp("([?|&])" + key + "=.*?(&|#|$)(.*)", "gi");
-        
+
         if (re.test(url))
         {
             if (typeof value !== 'undefined' && value !== null)
@@ -116,25 +116,25 @@ Phaser.Net.prototype = {
     /**
     * Returns the Query String as an object.
     * If you specify a parameter it will return just the value of that parameter, should it exist.
-    * 
+    *
     * @method Phaser.Net#getQueryString
     * @param {string} [parameter=''] - If specified this will return just the value for that key.
     * @return {string|object} An object containing the key value pairs found in the query string or just the value if a parameter was given.
     */
     getQueryString: function (parameter) {
 
-        if (typeof parameter === "undefined") { parameter = ''; }
+        if (parameter === undefined) { parameter = ''; }
 
         var output = {};
         var keyValues = location.search.substring(1).split('&');
 
-        for (var i in keyValues) {
-
+        for (var i in keyValues)
+        {
             var key = keyValues[i].split('=');
 
             if (key.length > 1)
             {
-                if (parameter && parameter == this.decodeURI(key[0]))
+                if (parameter && parameter === this.decodeURI(key[0]))
                 {
                     return this.decodeURI(key[1]);
                 }
@@ -150,9 +150,9 @@ Phaser.Net.prototype = {
     },
 
     /**
-    * Returns the Query String as an object.
-    * If you specify a parameter it will return just the value of that parameter, should it exist.
-    * 
+    * Takes a Uniform Resource Identifier (URI) component (previously created by encodeURIComponent or by a similar routine) and
+    * decodes it, replacing \ with spaces in the return. Used internally by the Net classes.
+    *
     * @method Phaser.Net#decodeURI
     * @param {string} value - The URI component to be decoded.
     * @return {string} The decoded value.
@@ -162,3 +162,5 @@ Phaser.Net.prototype = {
     }
 
 };
+
+Phaser.Net.prototype.constructor = Phaser.Net;

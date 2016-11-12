@@ -1,6 +1,6 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
@@ -8,7 +8,6 @@
 * Phaser.Particles is the Particle Manager for the game. It is called during the game update loop and in turn updates any Emitters attached to it.
 *
 * @class Phaser.Particles
-* @classdesc Phaser Particles
 * @constructor
 * @param {Phaser.Game} game - A reference to the currently running game.
 */
@@ -25,7 +24,7 @@ Phaser.Particles = function (game) {
     this.emitters = {};
 
     /**
-    * @property {number} ID - 
+    * @property {number} ID -
     * @default
     */
     this.ID = 0;
@@ -77,3 +76,5 @@ Phaser.Particles.prototype = {
     }
 
 };
+
+Phaser.Particles.prototype.constructor = Phaser.Particles;

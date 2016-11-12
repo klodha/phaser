@@ -1,195 +1,260 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
 /**
 * A Tile set is a combination of an image containing the tiles and collision data per tile.
 *
+* Tilesets are normally created automatically when Tiled data is loaded.
+*
 * @class Phaser.Tileset
 * @constructor
-* @param {Image} image - The Image object from the Cache.
-* @param {string} key - The key of the tileset in the cache.
-* @param {number} tileWidth - The width of the tile in pixels.
-* @param {number} tileHeight - The height of the tile in pixels.
-* @param {number} [tileMargin] - The margin around the tiles in the sheet.
-* @param {number} [tileSpacing] - The spacing between the tiles in the sheet.
+* @param {string} name - The name of the tileset in the map data.
+* @param {integer} firstgid - The first tile index this tileset contains.
+* @param {integer} [width=32] - Width of each tile (in pixels).
+* @param {integer} [height=32] - Height of each tile (in pixels).
+* @param {integer} [margin=0] - The margin around all tiles in the sheet (in pixels).
+* @param {integer} [spacing=0] - The spacing between each tile in the sheet (in pixels).
+* @param {object} [properties={}] - Custom Tileset properties.
 */
-Phaser.Tileset = function (image, key, tileWidth, tileHeight, tileMargin, tileSpacing) {
+Phaser.Tileset = function (name, firstgid, width, height, margin, spacing, properties) {
 
-    if (typeof tileMargin === "undefined") { tileMargin = 0; }
-    if (typeof tileSpacing === "undefined") { tileSpacing = 0; }
-
-    /**
-    * @property {string} key - The cache ID.
-    */
-    this.key = key;
+    if (width === undefined || width <= 0) { width = 32; }
+    if (height === undefined || height <= 0) { height = 32; }
+    if (margin === undefined) { margin = 0; }
+    if (spacing === undefined) { spacing = 0; }
 
     /**
-    * @property {object} image - The image used for rendering.
+    * The name of the Tileset.
+    * @property {string} name
     */
-    this.image = image;
+    this.name = name;
 
     /**
-    * @property {number} tileWidth - The width of a tile in pixels.
+    * The Tiled firstgid value.
+    * This is the starting index of the first tile index this Tileset contains.
+    * @property {integer} firstgid
     */
-    this.tileWidth = tileWidth;
+    this.firstgid = firstgid | 0;
 
     /**
-    * @property {number} tileHeight - The height of a tile in pixels.
+    * The width of each tile (in pixels).
+    * @property {integer} tileWidth
+    * @readonly
     */
-    this.tileHeight = tileHeight;
+    this.tileWidth = width | 0;
 
     /**
-    * @property {number} tileMargin - The margin around the tiles in the sheet.
+    * The height of each tile (in pixels).
+    * @property {integer} tileHeight
+    * @readonly
     */
-    this.margin = tileMargin;
+    this.tileHeight = height | 0;
 
     /**
-    * @property {number} tileSpacing - The margin around the tiles in the sheet.
+    * The margin around the tiles in the sheet (in pixels).
+    * Use `setSpacing` to change.
+    * @property {integer} tileMarge
+    * @readonly
     */
-    this.spacing = tileSpacing;
+    // Modified internally
+    this.tileMargin = margin | 0;
 
     /**
-    * @property {array} tiles - An array of the tile collision data.
+    * The spacing between each tile in the sheet (in pixels).
+    * Use `setSpacing` to change.
+    * @property {integer} tileSpacing
+    * @readonly
     */
-    this.tiles = [];
+    this.tileSpacing = spacing | 0;
 
-}
+    /**
+    * Tileset-specific properties that are typically defined in the Tiled editor.
+    * @property {object} properties
+    */
+    this.properties = properties || {};
+
+    /**
+    * The cached image that contains the individual tiles. Use {@link Phaser.Tileset.setImage setImage} to set.
+    * @property {?object} image
+    * @readonly
+    */
+    // Modified internally
+    this.image = null;
+
+    /**
+    * The number of tile rows in the the tileset.
+    * @property {integer}
+    * @readonly
+    */
+    // Modified internally
+    this.rows = 0;
+
+    /**
+    * The number of tile columns in the tileset.
+    * @property {integer} columns
+    * @readonly
+    */
+    // Modified internally
+    this.columns = 0;
+
+    /**
+    * The total number of tiles in the tileset.
+    * @property {integer} total
+    * @readonly
+    */
+    // Modified internally
+    this.total = 0;
+
+    /**
+    * The look-up table to specific tile image offsets.
+    * The coordinates are interlaced such that it is [x0, y0, x1, y1 .. xN, yN] and the tile with the index of firstgid is found at indices 0/1.
+    * @property {integer[]} drawCoords
+    * @private
+    */
+    this.drawCoords = [];
+
+};
 
 Phaser.Tileset.prototype = {
 
     /**
-    * Adds a Tile into this set.
+    * Draws a tile from this Tileset at the given coordinates on the context.
     *
-    * @method Phaser.Tileset#addTile
-    * @param {Phaser.Tile} tile - The tile to add to this set.
+    * @method Phaser.Tileset#draw
+    * @public
+    * @param {CanvasRenderingContext2D} context - The context to draw the tile onto.
+    * @param {number} x - The x coordinate to draw to.
+    * @param {number} y - The y coordinate to draw to.
+    * @param {integer} index - The index of the tile within the set to draw.
     */
-    addTile: function (tile) {
+    draw: function (context, x, y, index) {
 
-        this.tiles.push(tile);
+        //  Correct the tile index for the set and bias for interlacing
+        var coordIndex = (index - this.firstgid) << 1;
 
-        return tile;
+        if (coordIndex >= 0 && (coordIndex + 1) < this.drawCoords.length)
+        {
+            context.drawImage(
+                this.image,
+                this.drawCoords[coordIndex],
+                this.drawCoords[coordIndex + 1],
+                this.tileWidth,
+                this.tileHeight,
+                x,
+                y,
+                this.tileWidth,
+                this.tileHeight
+            );
+        }
 
     },
 
     /**
-    * Gets a Tile from this set.
+    * Returns true if and only if this tileset contains the given tile index.
     *
-    * @method Phaser.Tileset#getTile
-    * @param {number} index - The index of the tile within the set.
-    * @return {Phaser.Tile} The tile.
+    * @method Phaser.Tileset#containsTileIndex
+    * @public
+    * @return {boolean} True if this tileset contains the given index.
     */
-    getTile: function (index) {
+    containsTileIndex: function (tileIndex) {
 
-        if (this.tiles[index])
-        {
-            return this.tiles[index];
-        }
+        return (
+            tileIndex >= this.firstgid &&
+            tileIndex < (this.firstgid + this.total)
+        );
 
-        return null;
+    },
 
+    /**
+    * Set the image associated with this Tileset and update the tile data.
+    *
+    * @method Phaser.Tileset#setImage
+    * @public
+    * @param {Image} image - The image that contains the tiles.
+    */
+    setImage: function (image) {
+
+        this.image = image;
+        this.updateTileData(image.width, image.height);
+       
     },
 
     /**
     * Sets tile spacing and margins.
     *
     * @method Phaser.Tileset#setSpacing
-    * @param {number} [tileMargin] - The margin around the tiles in the sheet.
-    * @param {number} [tileSpacing] - The spacing between the tiles in the sheet.
+    * @public
+    * @param {integer} [margin=0] - The margin around the tiles in the sheet (in pixels).
+    * @param {integer} [spacing=0] - The spacing between the tiles in the sheet (in pixels).
     */
     setSpacing: function (margin, spacing) {
 
-        this.tileMargin = margin;
-        this.tileSpacing = spacing;
+        this.tileMargin = margin | 0;
+        this.tileSpacing = spacing | 0;
 
-    },
-
-    /**
-    * Checks if the tile at the given index can collide.
-    *
-    * @method Phaser.Tileset#canCollide
-    * @param {number} index - The index of the tile within the set.
-    * @return {boolean} True or false depending on the tile collision or null if no tile was found at the given index.
-    */
-    canCollide: function (index) {
-
-        if (this.tiles[index])
+        if (this.image)
         {
-            return this.tiles[index].collideNone;
+            this.updateTileData(this.image.width, this.image.height);
         }
 
-        return null;
-
     },
 
     /**
-    * Checks if the tile at the given index exists.
+    * Updates tile coordinates and tileset data.
     *
-    * @method Phaser.Tileset#checkTileIndex
-    * @param {number} index - The index of the tile within the set.
-    * @return {boolean} True if a tile exists at the given index otherwise false.
+    * @method Phaser.Tileset#updateTileData
+    * @private
+    * @param {integer} imageWidth - The (expected) width of the image to slice.
+    * @param {integer} imageHeight - The (expected) height of the image to slice.
     */
-    checkTileIndex: function (index) {
+    updateTileData: function (imageWidth, imageHeight) {
 
-        return (this.tiles[index]);
+        // May be fractional values
+        var rowCount = (imageHeight - this.tileMargin * 2 + this.tileSpacing) / (this.tileHeight + this.tileSpacing);
+        var colCount = (imageWidth - this.tileMargin * 2 + this.tileSpacing) / (this.tileWidth + this.tileSpacing);
 
-    },
-
-    /**
-    * Sets collision values on a range of tiles in the set.
-    *
-    * @method Phaser.Tileset#setCollisionRange
-    * @param {number} start - The index to start setting the collision data on.
-    * @param {number} stop - The index to stop setting the collision data on.
-    * @param {boolean} left - Should the tile collide on the left?
-    * @param {boolean} right - Should the tile collide on the right?
-    * @param {boolean} up - Should the tile collide on the top?
-    * @param {boolean} down - Should the tile collide on the bottom?
-    */
-    setCollisionRange: function (start, stop, left, right, up, down) {
-
-        if (this.tiles[start] && this.tiles[stop] && start < stop)
+        if (rowCount % 1 !== 0 || colCount % 1 !== 0)
         {
-            for (var i = start; i <= stop; i++)
+            console.warn("Phaser.Tileset - " + this.name + " image tile area is not an even multiple of tile size");
+        }
+
+        // In Tiled a tileset image that is not an even multiple of the tile dimensions
+        // is truncated - hence the floor when calculating the rows/columns.
+        rowCount = Math.floor(rowCount);
+        colCount = Math.floor(colCount);
+
+        if ((this.rows && this.rows !== rowCount) || (this.columns && this.columns !== colCount))
+        {
+            console.warn("Phaser.Tileset - actual and expected number of tile rows and columns differ");
+        }
+
+        this.rows = rowCount;
+        this.columns = colCount;
+        this.total = rowCount * colCount;
+
+        this.drawCoords.length = 0;
+
+        var tx = this.tileMargin;
+        var ty = this.tileMargin;
+
+        for (var y = 0; y < this.rows; y++)
+        {
+            for (var x = 0; x < this.columns; x++)
             {
-                this.tiles[i].setCollision(left, right, up, down);
+                this.drawCoords.push(tx);
+                this.drawCoords.push(ty);
+                tx += this.tileWidth + this.tileSpacing;
             }
-        }
 
-    },
-
-    /**
-    * Sets collision values on a tile in the set.
-    *
-    * @method Phaser.Tileset#setCollision
-    * @param {number} index - The index of the tile within the set.
-    * @param {boolean} left - Should the tile collide on the left?
-    * @param {boolean} right - Should the tile collide on the right?
-    * @param {boolean} up - Should the tile collide on the top?
-    * @param {boolean} down - Should the tile collide on the bottom?
-    */
-    setCollision: function (index, left, right, up, down) {
-
-        if (this.tiles[index])
-        {
-            this.tiles[index].setCollision(left, right, up, down);
+            tx = this.tileMargin;
+            ty += this.tileHeight + this.tileSpacing;
         }
 
     }
 
-}
+};
 
-/**
-* @name Phaser.Tileset#total
-* @property {number} total - The total number of tiles in this Tileset.
-* @readonly
-*/
-Object.defineProperty(Phaser.Tileset.prototype, "total", {
-
-    get: function () {
-        return this.tiles.length;
-    }
-
-});
+Phaser.Tileset.prototype.constructor = Phaser.Tileset;

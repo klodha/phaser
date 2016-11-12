@@ -1,14 +1,15 @@
 /**
 * @author       Richard Davey <rich@photonstorm.com>
-* @copyright    2013 Photon Storm Ltd.
+* @copyright    2016 Photon Storm Ltd.
 * @license      {@link https://github.com/photonstorm/phaser/blob/master/license.txt|MIT License}
 */
 
 /**
 * Phaser.Touch handles touch events with your game. Note: Android 2.x only supports 1 touch event at once, no multi-touch.
 *
+* You should not normally access this class directly, but instead use a Phaser.Pointer object which normalises all game input for you.
+*
 * @class Phaser.Touch
-* @classdesc The Touch class handles touch interactions with the game and the resulting Pointer objects.
 * @constructor
 * @param {Phaser.Game} game - A reference to the currently running game.
 */
@@ -18,15 +19,25 @@ Phaser.Touch = function (game) {
     * @property {Phaser.Game} game - A reference to the currently running game.
     */
     this.game = game;
-    
-    /**
-    * @property {boolean} disabled - You can disable all Touch events by setting disabled = true. While set all new touch events will be ignored.
-    * @return {boolean}
-    */
-    this.disabled = false;
 
     /**
-    * @property {Object} callbackContext - The context under which callbacks are called.
+    * Touch events will only be processed if enabled.
+    * @property {boolean} enabled
+    * @default
+    */
+    this.enabled = true;
+
+    /**
+    * An array of callbacks that will be fired every time a native touch start or touch end event is received from the browser.
+    * This is used internally to handle audio and video unlocking on mobile devices.
+    * To add a callback to this array please use `Touch.addTouchLockCallback`.
+    * @property {array} touchLockCallbacks
+    * @protected
+    */
+    this.touchLockCallbacks = [];
+
+    /**
+    * @property {object} callbackContext - The context under which callbacks are called.
     */
     this.callbackContext = this.game;
 
@@ -34,32 +45,32 @@ Phaser.Touch = function (game) {
     * @property {function} touchStartCallback - A callback that can be fired on a touchStart event.
     */
     this.touchStartCallback = null;
-    
+
     /**
     * @property {function} touchMoveCallback - A callback that can be fired on a touchMove event.
     */
     this.touchMoveCallback = null;
-    
+
     /**
     * @property {function} touchEndCallback - A callback that can be fired on a touchEnd event.
     */
     this.touchEndCallback = null;
-    
+
     /**
     * @property {function} touchEnterCallback - A callback that can be fired on a touchEnter event.
     */
     this.touchEnterCallback = null;
-    
+
     /**
     * @property {function} touchLeaveCallback - A callback that can be fired on a touchLeave event.
     */
     this.touchLeaveCallback = null;
-    
+
     /**
     * @property {function} touchCancelCallback - A callback that can be fired on a touchCancel event.
     */
     this.touchCancelCallback = null;
-    
+
     /**
     * @property {boolean} preventDefault - If true the TouchEvent will have prevent.default called on it.
     * @default
@@ -67,7 +78,8 @@ Phaser.Touch = function (game) {
     this.preventDefault = true;
 
     /**
-    * @property {TouchEvent} event - The browser touch event.
+    * @property {TouchEvent} event - The browser touch DOM event. Will be set to null if no touch event has ever been received.
+    * @default
     */
     this.event = null;
 
@@ -123,6 +135,12 @@ Phaser.Touch.prototype = {
     */
     start: function () {
 
+        if (this._onTouchStart !== null)
+        {
+            //  Avoid setting multiple listeners
+            return;
+        }
+
         var _this = this;
 
         if (this.game.device.touch)
@@ -151,12 +169,16 @@ Phaser.Touch.prototype = {
                 return _this.onTouchCancel(event);
             };
 
-            this.game.renderer.view.addEventListener('touchstart', this._onTouchStart, false);
-            this.game.renderer.view.addEventListener('touchmove', this._onTouchMove, false);
-            this.game.renderer.view.addEventListener('touchend', this._onTouchEnd, false);
-            this.game.renderer.view.addEventListener('touchenter', this._onTouchEnter, false);
-            this.game.renderer.view.addEventListener('touchleave', this._onTouchLeave, false);
-            this.game.renderer.view.addEventListener('touchcancel', this._onTouchCancel, false);
+            this.game.canvas.addEventListener('touchstart', this._onTouchStart, false);
+            this.game.canvas.addEventListener('touchmove', this._onTouchMove, false);
+            this.game.canvas.addEventListener('touchend', this._onTouchEnd, false);
+            this.game.canvas.addEventListener('touchcancel', this._onTouchCancel, false);
+
+            if (!this.game.device.cocoonJS)
+            {
+                this.game.canvas.addEventListener('touchenter', this._onTouchEnter, false);
+                this.game.canvas.addEventListener('touchleave', this._onTouchLeave, false);
+            }
         }
 
     },
@@ -176,22 +198,81 @@ Phaser.Touch.prototype = {
     },
 
     /**
+    * Adds a callback that is fired when a browser touchstart or touchend event is received.
+    *
+    * This is used internally to handle audio and video unlocking on mobile devices.
+    *
+    * If the callback returns 'true' then the callback is automatically deleted once invoked.
+    *
+    * The callback is added to the Phaser.Touch.touchLockCallbacks array and should be removed with Phaser.Touch.removeTouchLockCallback.
+    * 
+    * @method Phaser.Touch#addTouchLockCallback
+    * @param {function} callback - The callback that will be called when a touchstart event is received.
+    * @param {object} context - The context in which the callback will be called.
+    * @param {boolean} [onEnd=false] - Will the callback fire on a touchstart (default) or touchend event?
+    */
+    addTouchLockCallback: function (callback, context, onEnd) {
+
+        if (onEnd === undefined) { onEnd = false; }
+
+        this.touchLockCallbacks.push({ callback: callback, context: context, onEnd: onEnd });
+
+    },
+
+    /**
+    * Removes the callback at the defined index from the Phaser.Touch.touchLockCallbacks array
+    * 
+    * @method Phaser.Touch#removeTouchLockCallback
+    * @param {function} callback - The callback to be removed.
+    * @param {object} context - The context in which the callback exists.
+    * @return {boolean} True if the callback was deleted, otherwise false.
+    */
+    removeTouchLockCallback: function (callback, context) {
+
+        var i = this.touchLockCallbacks.length;
+
+        while (i--)
+        {
+            if (this.touchLockCallbacks[i].callback === callback && this.touchLockCallbacks[i].context === context)
+            {
+                this.touchLockCallbacks.splice(i, 1);
+                return true;
+            }
+        }
+
+        return false;
+
+    },
+
+    /**
     * The internal method that handles the touchstart event from the browser.
     * @method Phaser.Touch#onTouchStart
     * @param {TouchEvent} event - The native event from the browser. This gets stored in Touch.event.
     */
     onTouchStart: function (event) {
 
+        var i = this.touchLockCallbacks.length;
+
+        while (i--)
+        {
+            var cb = this.touchLockCallbacks[i];
+
+            if (!cb.onEnd && cb.callback.call(cb.context, this, event))
+            {
+                this.touchLockCallbacks.splice(i, 1);
+            }
+        }
+
         this.event = event;
+
+        if (!this.game.input.enabled || !this.enabled)
+        {
+            return;
+        }
 
         if (this.touchStartCallback)
         {
             this.touchStartCallback.call(this.callbackContext, event);
-        }
-
-        if (this.game.input.disabled || this.disabled)
-        {
-            return;
         }
 
         if (this.preventDefault)
@@ -224,7 +305,7 @@ Phaser.Touch.prototype = {
             this.touchCancelCallback.call(this.callbackContext, event);
         }
 
-        if (this.game.input.disabled || this.disabled)
+        if (!this.game.input.enabled || !this.enabled)
         {
             return;
         }
@@ -258,7 +339,7 @@ Phaser.Touch.prototype = {
             this.touchEnterCallback.call(this.callbackContext, event);
         }
 
-        if (this.game.input.disabled || this.disabled)
+        if (!this.game.input.enabled || !this.enabled)
         {
             return;
         }
@@ -267,13 +348,6 @@ Phaser.Touch.prototype = {
         {
             event.preventDefault();
         }
-
-        /*
-        for (var i = 0; i < event.changedTouches.length; i++)
-        {
-            //console.log('touch enter');
-        }
-       */
 
     },
 
@@ -296,13 +370,6 @@ Phaser.Touch.prototype = {
         {
             event.preventDefault();
         }
-
-        /*
-        for (var i = 0; i < event.changedTouches.length; i++)
-        {
-            //console.log('touch leave');
-        }
-       */
 
     },
 
@@ -339,6 +406,18 @@ Phaser.Touch.prototype = {
     */
     onTouchEnd: function (event) {
 
+        var i = this.touchLockCallbacks.length;
+
+        while (i--)
+        {
+            var cb = this.touchLockCallbacks[i];
+
+            if (cb.onEnd && cb.callback.call(cb.context, this, event))
+            {
+                this.touchLockCallbacks.splice(i, 1);
+            }
+        }
+
         this.event = event;
 
         if (this.touchEndCallback)
@@ -369,14 +448,16 @@ Phaser.Touch.prototype = {
 
         if (this.game.device.touch)
         {
-            this.game.stage.canvas.removeEventListener('touchstart', this._onTouchStart);
-            this.game.stage.canvas.removeEventListener('touchmove', this._onTouchMove);
-            this.game.stage.canvas.removeEventListener('touchend', this._onTouchEnd);
-            this.game.stage.canvas.removeEventListener('touchenter', this._onTouchEnter);
-            this.game.stage.canvas.removeEventListener('touchleave', this._onTouchLeave);
-            this.game.stage.canvas.removeEventListener('touchcancel', this._onTouchCancel);
+            this.game.canvas.removeEventListener('touchstart', this._onTouchStart);
+            this.game.canvas.removeEventListener('touchmove', this._onTouchMove);
+            this.game.canvas.removeEventListener('touchend', this._onTouchEnd);
+            this.game.canvas.removeEventListener('touchenter', this._onTouchEnter);
+            this.game.canvas.removeEventListener('touchleave', this._onTouchLeave);
+            this.game.canvas.removeEventListener('touchcancel', this._onTouchCancel);
         }
 
     }
 
 };
+
+Phaser.Touch.prototype.constructor = Phaser.Touch;
